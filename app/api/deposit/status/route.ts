@@ -16,42 +16,38 @@ function supabaseHeaders(): Record<string, string> {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { amount } = body;
+    const { transaction_id } = body;
 
-    if (!amount || amount < 1) {
+    if (!transaction_id) {
       return NextResponse.json(
-        { success: false, message: "Valor minimo de deposito e R$1,00" },
+        { success: false, message: "ID da transacao e obrigatorio" },
         { status: 400 }
       );
     }
 
-    // Read auth data from custom headers
     const userEmail = request.headers.get("x-user-email");
 
     if (!userEmail) {
       return NextResponse.json(
-        { success: false, message: "Nao autenticado. Faca login novamente." },
+        { success: false, message: "Nao autenticado." },
         { status: 401 }
       );
     }
 
-    // Call Supabase Edge Function generate-pix
-    // Body: { email, valor }
+    // Call Supabase Edge Function check-deposit-status
     const response = await fetch(
-      `${SUPABASE_URL}/functions/v1/generate-pix`,
+      `${SUPABASE_URL}/functions/v1/check-deposit-status`,
       {
         method: "POST",
         headers: supabaseHeaders(),
         body: JSON.stringify({
           email: userEmail,
-          valor: Number(amount),
+          transaction_id,
         }),
       }
     );
 
     const responseText = await response.text();
-    console.log("[v0] generate-pix status:", response.status);
-    console.log("[v0] generate-pix response:", responseText.substring(0, 500));
 
     let data: Record<string, unknown>;
     try {
@@ -65,24 +61,22 @@ export async function POST(request: Request) {
 
     if (!response.ok || !data.success) {
       return NextResponse.json(
-        { success: false, message: (data.message as string) || "Erro ao processar deposito" },
+        { success: false, message: (data.message as string) || "Erro ao verificar status" },
         { status: response.status >= 400 ? response.status : 500 }
       );
     }
 
-    // Response format: { success, pix_code, qr_code, transaction_id, amount, value }
+    // Response: { success, id, amount, status }
     return NextResponse.json({
       success: true,
       data: {
-        pix_code: data.pix_code,
-        qr_code: data.qr_code,
-        transaction_id: data.transaction_id,
+        id: data.id,
         amount: data.amount,
-        value: data.value,
+        status: data.status,
       },
     });
   } catch (error) {
-    console.error("[v0] Erro no deposit:", error instanceof Error ? error.message : String(error));
+    console.error("[v0] Erro no check-deposit-status:", error instanceof Error ? error.message : String(error));
     return NextResponse.json(
       { success: false, message: "Erro interno do servidor" },
       { status: 500 }
