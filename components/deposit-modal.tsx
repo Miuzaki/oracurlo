@@ -42,7 +42,7 @@ interface DepositResponse {
 const QUICK_AMOUNTS = [10, 25, 50, 100, 200, 500];
 
 export function DepositModal({ open, onOpenChange }: DepositModalProps) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, getAuthHeaders } = useAuth();
   const [amount, setAmount] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -68,7 +68,7 @@ export function DepositModal({ open, onOpenChange }: DepositModalProps) {
     try {
       const res = await fetch("/api/deposit", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ amount: numAmount }),
       });
 

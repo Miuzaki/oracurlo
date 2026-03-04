@@ -1,16 +1,14 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-const API_BASE = "https://oauth-routes-cactus.grupoautoma.com";
-const BRAND_SLUG = "apostatudo";
+const SUPABASE_URL = "https://dufiwjtermmxfpcpeixd.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR1Zml3anRlcm1teGZwY3BlaXhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ1ODc4NjAsImV4cCI6MjA3MDE2Mzg2MH0.lRw6CrAkjefy0mnSmdMYxFH6YRZI6j4-85WBh_hHCJE";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { amount } = body;
-
-    console.log("[v0] ====== POST /api/deposit ======");
-    console.log("[v0] Amount recebido:", amount);
 
     if (!amount || amount < 1) {
       return NextResponse.json(
@@ -19,76 +17,73 @@ export async function POST(request: Request) {
       );
     }
 
+    // Get auth data from cookies + fallback to headers
     const cookieStore = await cookies();
-    const token = cookieStore.get("auth_token")?.value;
-    const userId = cookieStore.get("auth_user_id")?.value;
 
-    console.log("[v0] Token presente:", !!token);
-    console.log("[v0] User ID:", userId);
+    let bearerToken = cookieStore.get("bearer_token")?.value;
+    let connectSid = cookieStore.get("connect_sid")?.value;
+    let userEmail = cookieStore.get("user_email")?.value;
 
-    if (!token || !userId) {
+    if (!bearerToken) {
+      bearerToken = request.headers.get("x-bearer-token") || undefined;
+    }
+    if (!connectSid) {
+      connectSid = request.headers.get("x-connect-sid") || undefined;
+    }
+    if (!userEmail) {
+      userEmail = request.headers.get("x-user-email") || undefined;
+    }
+
+    if (!bearerToken || !userEmail) {
       return NextResponse.json(
         { success: false, message: "Nao autenticado. Faca login novamente." },
         { status: 401 }
       );
     }
 
-    const depositUrl = `${API_BASE}/api/deposit`;
-    console.log("[v0] Fazendo POST para:", depositUrl);
-
-    const depositBody = {
-      amount: Number(amount),
-      user_id: userId,
-    };
-
-    console.log("[v0] Body enviado:", JSON.stringify(depositBody));
-
-    const response = await fetch(depositUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/plain, */*",
-        "Authorization": `Bearer ${token}`,
-        "X-Brand-Slug": BRAND_SLUG,
-        "Origin": "https://visionbacboo.site",
-        "Referer": "https://visionbacboo.site/",
-      },
-      body: JSON.stringify(depositBody),
-    });
-
-    console.log("[v0] Deposit response status:", response.status);
+    // Call Supabase Edge Function generate-pix
+    const response = await fetch(
+      `${SUPABASE_URL}/functions/v1/generate-pix`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "*/*",
+          "Content-Type": "application/json",
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          email: userEmail,
+          valor: Number(amount),
+        }),
+      }
+    );
 
     const responseText = await response.text();
-    console.log("[v0] Deposit response body:", responseText.substring(0, 1000));
 
-    let data;
+    let data: Record<string, unknown>;
     try {
       data = JSON.parse(responseText);
     } catch {
-      console.log("[v0] Erro ao parsear JSON do deposit");
       return NextResponse.json(
         { success: false, message: "Resposta invalida do servidor" },
         { status: 502 }
       );
     }
 
-    if (!response.ok) {
+    if (!response.ok || !data.success) {
       return NextResponse.json(
-        { success: false, message: data?.message || "Erro ao processar deposito" },
+        { success: false, message: (data.message as string) || "Erro ao processar deposito" },
         { status: response.status }
       );
     }
-
-    console.log("[v0] Deposit sucesso:", JSON.stringify(data).substring(0, 500));
-    console.log("[v0] ====== DEPOSIT COMPLETO ======");
 
     return NextResponse.json({
       success: true,
       data,
     });
   } catch (error) {
-    console.error("[v0] ====== ERRO CRITICO NO DEPOSIT ======");
-    console.error("[v0] Mensagem:", error instanceof Error ? error.message : String(error));
+    console.error("[v0] Erro no deposit:", error instanceof Error ? error.message : String(error));
     return NextResponse.json(
       { success: false, message: "Erro interno do servidor" },
       { status: 500 }

@@ -794,7 +794,7 @@ function StrategyVelasRoxasPanel({
 export default function GamePage() {
   const params = useParams();
   const gameId = params.id as string;
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, getAuthHeaders } = useAuth();
 
   const [loginOpen, setLoginOpen] = useState(false);
   const [gameUrl, setGameUrl] = useState<string | null>(null);
@@ -860,7 +860,10 @@ export default function GamePage() {
       const res = await fetch(
         `/api/games/start?slug=${encodeURIComponent(
           game.slug,
-        )}&platform=${platform}&use_demo=1`,
+        )}&platform=${platform}&use_demo=0`,
+        {
+          headers: { ...getAuthHeaders() },
+        },
       );
 
       const rawText = await res.text();

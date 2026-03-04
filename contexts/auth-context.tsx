@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 
 export interface Player {
-  id?: number;
+  id?: number | string;
   name?: string;
   first_name?: string;
   last_name?: string;
@@ -88,6 +88,73 @@ export interface Player {
   [key: string]: unknown;
 }
 
+// Session keys for sessionStorage
+const SESSION_KEYS = {
+  BEARER_TOKEN: "auth_bearer_token",
+  CONNECT_SID: "auth_connect_sid",
+  USER_EMAIL: "auth_user_email",
+  PLAYER_DATA: "auth_player_data",
+} as const;
+
+// Helper to get session data from sessionStorage
+function getSessionData() {
+  if (typeof window === "undefined") return null;
+  const bearerToken = sessionStorage.getItem(SESSION_KEYS.BEARER_TOKEN);
+  const connectSid = sessionStorage.getItem(SESSION_KEYS.CONNECT_SID);
+  const userEmail = sessionStorage.getItem(SESSION_KEYS.USER_EMAIL);
+  if (!bearerToken || !connectSid || !userEmail) return null;
+  return { bearerToken, connectSid, userEmail };
+}
+
+// Helper to save session data to sessionStorage
+function saveSessionData(bearerToken: string, connectSid: string, userEmail: string) {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(SESSION_KEYS.BEARER_TOKEN, bearerToken);
+  sessionStorage.setItem(SESSION_KEYS.CONNECT_SID, connectSid);
+  sessionStorage.setItem(SESSION_KEYS.USER_EMAIL, userEmail);
+}
+
+// Helper to clear session data
+function clearSessionData() {
+  if (typeof window === "undefined") return;
+  sessionStorage.removeItem(SESSION_KEYS.BEARER_TOKEN);
+  sessionStorage.removeItem(SESSION_KEYS.CONNECT_SID);
+  sessionStorage.removeItem(SESSION_KEYS.USER_EMAIL);
+  sessionStorage.removeItem(SESSION_KEYS.PLAYER_DATA);
+}
+
+// Helper to save/restore player data in sessionStorage
+function savePlayerData(player: Player) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(SESSION_KEYS.PLAYER_DATA, JSON.stringify(player));
+  } catch {
+    // ignore
+  }
+}
+
+function getStoredPlayerData(): Player | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEYS.PLAYER_DATA);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+// Build auth headers for fetch calls to our Next.js API routes
+export function getAuthHeaders(): Record<string, string> {
+  const session = getSessionData();
+  if (!session) return {};
+  return {
+    "x-bearer-token": session.bearerToken,
+    "x-connect-sid": session.connectSid,
+    "x-user-email": session.userEmail,
+  };
+}
+
 interface AuthContextType {
   player: Player | null;
   isLoading: boolean;
@@ -95,6 +162,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{ success: boolean; message: string }>;
   logout: () => Promise<void>;
   checkSession: () => Promise<void>;
+  getAuthHeaders: () => Record<string, string>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -106,27 +174,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const checkSession = useCallback(async () => {
     try {
       setIsLoading(true);
-      console.log("[v0] AuthContext: verificando sessao...");
-      const res = await fetch("/api/auth/me");
-      console.log("[v0] AuthContext: /me status:", res.status);
-      
+
+      // Check if we have session data in sessionStorage
+      const session = getSessionData();
+      if (!session) {
+        setPlayer(null);
+        return;
+      }
+
+      // Verify session by calling /api/auth/me with session headers
+      const res = await fetch("/api/auth/me", {
+        headers: {
+          ...getAuthHeaders(),
+        },
+      });
+
       if (res.ok) {
         const data = await res.json();
-        console.log("[v0] AuthContext: /me data:", JSON.stringify(data).substring(0, 300));
         if (data.success && data.data?.player) {
           setPlayer(data.data.player);
-          console.log("[v0] AuthContext: player definido com sucesso");
+          savePlayerData(data.data.player);
         } else {
+          // Session invalid, clear everything
+          clearSessionData();
           setPlayer(null);
-          console.log("[v0] AuthContext: sem player nos dados");
         }
       } else {
-        setPlayer(null);
-        console.log("[v0] AuthContext: /me retornou erro");
+        // Try using stored player data as fallback (for offline/temp issues)
+        const storedPlayer = getStoredPlayerData();
+        if (storedPlayer && session) {
+          // We have session data but /me failed - keep the session alive
+          // The user might have a valid token but the balance check failed temporarily
+          setPlayer(storedPlayer);
+        } else {
+          clearSessionData();
+          setPlayer(null);
+        }
       }
-    } catch (err) {
-      console.log("[v0] AuthContext: erro ao verificar sessao:", err);
-      setPlayer(null);
+    } catch {
+      // On error, try to use stored data
+      const storedPlayer = getStoredPlayerData();
+      const session = getSessionData();
+      if (storedPlayer && session) {
+        setPlayer(storedPlayer);
+      } else {
+        setPlayer(null);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -138,22 +231,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     try {
-      console.log("[v0] AuthContext: iniciando login com email:", email);
-      
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
 
-      console.log("[v0] AuthContext: login response status:", res.status);
-
       const data = await res.json();
-      console.log("[v0] AuthContext: login response data:", JSON.stringify(data).substring(0, 500));
 
       if (data.success) {
-        setPlayer(data.data.player);
-        console.log("[v0] AuthContext: login OK, player definido");
+        // Save session data from the login response
+        const { bearerToken, connectSid, userEmail, player: playerData } = data.data;
+
+        if (bearerToken && connectSid && userEmail) {
+          saveSessionData(bearerToken, connectSid, userEmail);
+        }
+
+        if (playerData) {
+          setPlayer(playerData);
+          savePlayerData(playerData);
+        }
+
         return { success: true, message: "Login realizado com sucesso!" };
       }
 
@@ -161,17 +259,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         success: false,
         message: data.message || "Erro ao realizar login",
       };
-    } catch (err) {
-      console.log("[v0] AuthContext: erro no login:", err);
+    } catch {
       return { success: false, message: "Erro de conexao com o servidor" };
     }
   }, []);
 
   const logout = useCallback(async () => {
     try {
-      console.log("[v0] AuthContext: fazendo logout");
       await fetch("/api/auth/logout", { method: "POST" });
     } finally {
+      clearSessionData();
       setPlayer(null);
     }
   }, []);
@@ -185,6 +282,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         logout,
         checkSession,
+        getAuthHeaders,
       }}
     >
       {children}

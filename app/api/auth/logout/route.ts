@@ -3,14 +3,14 @@ import { NextResponse } from "next/server";
 
 export async function POST() {
   try {
-    console.log("[v0] ====== POST /api/auth/logout ======");
-
     const cookieStore = await cookies();
+    cookieStore.delete("bearer_token");
+    cookieStore.delete("connect_sid");
+    cookieStore.delete("user_email");
+    // Also clear legacy cookies from old implementation
     cookieStore.delete("auth_token");
     cookieStore.delete("auth_user_id");
     cookieStore.delete("auth_data");
-
-    console.log("[v0] Cookies removidos com sucesso");
 
     return NextResponse.json({
       success: true,
