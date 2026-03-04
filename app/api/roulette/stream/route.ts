@@ -1,13 +1,11 @@
 import { NextRequest } from "next/server";
 
 /**
- * Aviator / Crash game upstream sources.
- *
  * aviator-spribe:
- *   - WS returns JSON arrays like [{valor:"1,50x", hora:"14:30:00"}, ...]
+ *   WS returns: [{valor:"1,50x", hora:"14:30:00"}, ...]
  *
  * red-baron-evolution:
- *   - WS returns {type:"new", data:[161.46, 12.56, 1.42, ...]}
+ *   WS returns: {type:"new", data:[161.46, 12.56, ...]}
  */
 
 const SOURCES: Record<
@@ -33,6 +31,8 @@ interface AviatorResult {
   timestamp: string; // ISO
   destaque: boolean;
 }
+
+const SP_OFFSET_MINUTES = -180; // America/Sao_Paulo (hoje é -03:00)
 
 function parseMultiplier(valor: string): number | null {
   if (!valor) return null;
@@ -69,71 +69,118 @@ function parseHora(
   return { hh, mm, ss };
 }
 
+// pega "YYYY-MM-DD" em São Paulo, independente do TZ do servidor
+function getSaoPauloYMD(now: Date): { y: number; m: number; d: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+
+  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  return {
+    y: Number(map.year),
+    m: Number(map.month),
+    d: Number(map.day),
+  };
+}
+
 /**
- * Reconstrói timestamps completos (com data) a partir de [{hora:"HH:mm:ss"}...]
- * assumindo que o array vem em ordem DESC (mais recente primeiro).
- *
- * Regra:
- * - usa "hoje" como base
- * - conforme percorre itens mais antigos, se a hora do próximo item "aumentar"
- *   em relação ao anterior (ex: 00:01 depois 23:59), cruzou meia-noite => subtrai 1 dia.
+ * Converte uma data/hora LOCAL de SP para Date real (UTC por baixo)
+ * Ex: SP 15:49:50 -> UTC 18:49:50Z
  */
-function buildTimestampsFromHorasDesc(
+function makeDateFromSPLocal(
+  y: number,
+  m: number,
+  d: number,
+  hh: number,
+  mm: number,
+  ss: number,
+): Date {
+  // SP = UTC-3 => UTC = SP + 3h
+  const utcMs = Date.UTC(y, m - 1, d, hh - SP_OFFSET_MINUTES / 60, mm, ss, 0);
+  return new Date(utcMs);
+}
+
+function addDaysYMD(
+  y: number,
+  m: number,
+  d: number,
+  deltaDays: number,
+): { y: number; m: number; d: number } {
+  // faz no UTC pra não depender do TZ do servidor
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  dt.setUTCDate(dt.getUTCDate() + deltaDays);
+  return {
+    y: dt.getUTCFullYear(),
+    m: dt.getUTCMonth() + 1,
+    d: dt.getUTCDate(),
+  };
+}
+
+/**
+ * Reconstrói timestamps completos assumindo raw em ordem DESC (mais recente primeiro),
+ * usando "data de SP" como base e tratando virada de meia-noite.
+ */
+function buildTimestampsFromHorasDescSP(
   raw: Array<{ valor: string; hora: string }>,
   now: Date,
 ): Array<{ multiplier: number; date: Date }> {
   const out: Array<{ multiplier: number; date: Date }> = [];
 
-  // baseDate = hoje (local)
-  let base = new Date(now);
-  base.setMilliseconds(0);
+  // base = "hoje em SP"
+  let { y, m, d } = getSaoPauloYMD(now);
 
-  // controle da hora anterior (em segundos do dia)
+  // controle da hora anterior (segundos do dia)
   let prevSecOfDay: number | null = null;
 
   for (let i = 0; i < raw.length; i++) {
     const item = raw[i]!;
-    const m = parseMultiplier(item.valor);
-    if (m == null) continue;
+    const mult = parseMultiplier(item.valor);
+    if (mult == null) continue;
 
     const h = parseHora(item.hora);
     if (!h) continue;
 
     const secOfDay = h.hh * 3600 + h.mm * 60 + h.ss;
 
-    // Se a hora "aumentou" indo para trás no histórico, cruzou meia-noite => volta 1 dia
-    // Ex (desc): 00:00:10, 23:59:40  => secOfDay (10) -> (86380) aumentou, então -1 dia
+    // se "voltando no histórico" a hora aumentar => cruzou meia-noite (volta 1 dia)
     if (prevSecOfDay != null && secOfDay > prevSecOfDay) {
-      base = new Date(base.getTime() - 24 * 60 * 60 * 1000);
-      base.setMilliseconds(0);
+      const back = addDaysYMD(y, m, d, -1);
+      y = back.y;
+      m = back.m;
+      d = back.d;
     }
     prevSecOfDay = secOfDay;
 
-    const d = new Date(base);
-    d.setHours(h.hh, h.mm, h.ss, 0);
+    const date = makeDateFromSPLocal(y, m, d, h.hh, h.mm, h.ss);
 
-    // Se por algum motivo ainda ficou no futuro (clock/latência), puxa 1 dia
-    // (tolerância de 2 minutos)
-    if (d.getTime() > now.getTime() + 2 * 60 * 1000) {
-      d.setDate(d.getDate() - 1);
+    // proteção extra: se ainda ficar no futuro em relação ao now real, volta 1 dia
+    if (date.getTime() > now.getTime() + 2 * 60 * 1000) {
+      const back = addDaysYMD(y, m, d, -1);
+      const fixed = makeDateFromSPLocal(
+        back.y,
+        back.m,
+        back.d,
+        h.hh,
+        h.mm,
+        h.ss,
+      );
+      out.push({ multiplier: mult, date: fixed });
+      continue;
     }
 
-    out.push({ multiplier: m, date: d });
+    out.push({ multiplier: mult, date });
   }
 
   return out;
 }
 
-/**
- * ID determinístico baseado em timestamp(ms) + multiplier(centésimos).
- * Evita mudar id toda vez que o WS reenvia o histórico.
- */
 function makeStableId(date: Date, multiplier: number): number {
   const ms = date.getTime();
-  const mult = Math.round(multiplier * 100); // centésimos
-  // hash simples dentro do range safe do JS number
-  const h = (ms % 2_000_000_000) * 1000 + (mult % 1000);
-  return h;
+  const mult = Math.round(multiplier * 100);
+  return (ms % 2_000_000_000) * 1000 + (mult % 1000);
 }
 
 export async function GET(req: NextRequest) {
@@ -160,18 +207,14 @@ export async function GET(req: NextRequest) {
               `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`,
             ),
           );
-        } catch {
-          // stream may have closed
-        }
+        } catch {}
       }
 
       const keepAlive = setInterval(() => {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(": keepalive\n\n"));
-        } catch {
-          // ignore
-        }
+        } catch {}
       }, 15000);
 
       function cleanup() {
@@ -180,9 +223,7 @@ export async function GET(req: NextRequest) {
           closed = true;
           try {
             controller.close();
-          } catch {
-            // ignore
-          }
+          } catch {}
         }
       }
 
@@ -201,30 +242,25 @@ export async function GET(req: NextRequest) {
               const raw: Array<{ valor: string; hora: string }> = JSON.parse(
                 rawMsg.toString(),
               );
-
               if (!Array.isArray(raw) || raw.length === 0) return;
 
               const now = new Date();
-
-              const built = buildTimestampsFromHorasDesc(raw, now);
+              const built = buildTimestampsFromHorasDescSP(raw, now);
 
               const results: AviatorResult[] = built.map(
-                ({ multiplier, date }) => {
-                  const timestamp = date.toISOString();
-                  return {
-                    id: makeStableId(date, multiplier),
-                    multiplier,
-                    timestamp,
-                    destaque: multiplier >= 10,
-                  };
-                },
+                ({ multiplier, date }) => ({
+                  id: makeStableId(date, multiplier),
+                  multiplier,
+                  timestamp: date.toISOString(), // agora representa o instante correto (SP -> UTC)
+                  destaque: multiplier >= 10,
+                }),
               );
 
               if (results.length > 0) {
                 send("history", { channel_id: channelId, results });
               }
             } catch {
-              // ignore parse errors
+              // ignore
             }
           });
 
@@ -243,7 +279,8 @@ export async function GET(req: NextRequest) {
             } catch {}
             cleanup();
           });
-        } else if (source.kind === "ws_redbaron") {
+        } else {
+          // ws_redbaron
           const ws = new WebSocket(source.url);
 
           ws.on("open", () => {
@@ -253,7 +290,6 @@ export async function GET(req: NextRequest) {
           ws.on("message", (rawMsg: Buffer | string) => {
             try {
               const parsed = JSON.parse(rawMsg.toString());
-
               if (parsed.type === "new" && Array.isArray(parsed.data)) {
                 const now = new Date();
                 const results: AviatorResult[] = [];
@@ -278,7 +314,7 @@ export async function GET(req: NextRequest) {
                 }
               }
             } catch {
-              // ignore parse errors
+              // ignore
             }
           });
 
