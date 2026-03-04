@@ -945,56 +945,54 @@ export default function GamePage() {
           </Link>
 
           {/* Header do jogo */}
-          <div className="w-full max-w-xl rounded-2xl border border-border bg-card p-6 shadow-lg">
-            <div className="mb-6 flex items-center gap-4">
-              <div className="relative flex h-16 w-16 items-center justify-center">
-                <div className="absolute inset-0 rounded-full border border-primary/20" />
-                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                  {game.icon}
-                </div>
+          <div className="mb-6 flex items-center gap-4">
+            <div className="relative flex h-16 w-16 items-center justify-center">
+              <div className="absolute inset-0 rounded-full border border-primary/20" />
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                {game.icon}
               </div>
-              <div className="flex-1">
-                <div className="flex items-center justify-between">
-                  <h1 className="text-2xl font-bold text-foreground uppercase tracking-wide">
-                    {game.name}
-                  </h1>
-                  <LiveClock />
-                </div>
-                <div className="mt-1 flex items-center gap-3">
-                  <span className="font-mono text-xs text-muted-foreground uppercase tracking-wider">
-                    {game.provider}
-                  </span>
-                  <div className="h-3 w-px bg-border" />
-                  <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary">
-                    Crash
-                  </span>
-                  <div className="h-3 w-px bg-border" />
-                  <div className="flex items-center gap-1">
-                    {connected ? (
-                      <>
-                        <Wifi className="h-3.5 w-3.5 text-primary" />
-                        <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary">
-                          Ao Vivo
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <WifiOff className="h-3.5 w-3.5 text-muted-foreground" />
-                        <span className="font-mono text-[10px] uppercase text-muted-foreground">
-                          {"Conectando..."}
-                        </span>
-                      </>
-                    )}
-                  </div>
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <h1 className="text-2xl font-bold text-foreground uppercase tracking-wide">
+                  {game.name}
+                </h1>
+                <LiveClock />
+              </div>
+              <div className="mt-1 flex items-center gap-3">
+                <span className="font-mono text-xs text-muted-foreground uppercase tracking-wider">
+                  {game.provider}
+                </span>
+                <div className="h-3 w-px bg-border" />
+                <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary">
+                  Crash
+                </span>
+                <div className="h-3 w-px bg-border" />
+                <div className="flex items-center gap-1">
+                  {connected ? (
+                    <>
+                      <Wifi className="h-3.5 w-3.5 text-primary" />
+                      <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary">
+                        Ao Vivo
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <WifiOff className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="font-mono text-[10px] uppercase text-muted-foreground">
+                        {"Conectando..."}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
+          </div>
 
-            <div className="rounded-xl border border-border/50 bg-secondary/30 p-8">
-              <p className="text-center text-sm text-muted-foreground">
-                Conteudo do jogo aqui
-              </p>
-            </div>
+          <div className="rounded-xl border border-border/50 bg-secondary/30 p-8">
+            <p className="text-center text-sm text-muted-foreground">
+              Conteudo do jogo aqui
+            </p>
           </div>
 
           {/* Área do jogo (✅ iframe único; fullscreen só por CSS) */}
