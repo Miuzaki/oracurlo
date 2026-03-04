@@ -18,7 +18,7 @@ const SOURCES: Record<
 > = {
   "aviator-spribe": {
     kind: "ws_aviator",
-    url: "ws://100.81.79.127:8805/ws",
+    url: "wss://history.oraculoavitor.com.br//ws",
   },
   "red-baron-evolution": {
     kind: "ws_redbaron",
