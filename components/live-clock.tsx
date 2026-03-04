@@ -34,22 +34,22 @@ export function LiveClock() {
       {/* Glow sutil */}
       <div className="absolute inset-0 rounded-full bg-emerald-500/20 opacity-0 blur-md transition-opacity duration-300 group-hover:opacity-100" />
 
-      <Clock className="relative h-6 w-6 text-emerald-500/80 transition-colors duration-300 group-hover:text-emerald-500" />
+      <Clock className="relative h-6 w-6  transition-colors duration-300 " />
 
       <div className="relative flex items-center gap-0.5">
         <span className="font-mono text-[15px] font-bold tabular-nums tracking-wider text-foreground">
           {hours}
         </span>
-        <span className="animate-pulse font-mono text-[15px] font-bold text-emerald-500">
+        <span className="animate-pulse font-mono text-[15px] font-bold ">
           {":"}
         </span>
         <span className="font-mono text-[15px] font-bold tabular-nums tracking-wider text-foreground">
           {minutes}
         </span>
-        <span className="animate-pulse font-mono text-[15px] font-bold text-emerald-500">
+        <span className="animate-pulse font-mono text-[15px] font-bold ">
           {":"}
         </span>
-        <span className="font-mono text-[15px] font-bold tabular-nums tracking-wider text-emerald-500">
+        <span className="font-mono text-[15px] font-bold tabular-nums tracking-wider ">
           {seconds}
         </span>
       </div>
