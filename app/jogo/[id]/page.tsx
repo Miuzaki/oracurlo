@@ -989,12 +989,6 @@ export default function GamePage() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-border/50 bg-secondary/30 p-8">
-            <p className="text-center text-sm text-muted-foreground">
-              Conteudo do jogo aqui
-            </p>
-          </div>
-
           {/* Área do jogo (✅ iframe único; fullscreen só por CSS) */}
           {gameUrl ? (
             <div className="mb-8 flex flex-col gap-3">
