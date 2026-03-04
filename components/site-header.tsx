@@ -63,7 +63,7 @@ export function SiteHeader() {
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2">
             <img
-              src="/logo.png"
+              src="/logo.PNG"
               alt="Oraculo Aviator"
               className="h-20 object-cover"
             />
