@@ -45,6 +45,7 @@ import {
   MousePointerClick,
   Eraser,
 } from "lucide-react";
+import { LiveClock } from "@/components/live-clock";
 
 /* =========================================================
  * Tipos / Utils
@@ -955,6 +956,7 @@ export default function GamePage() {
               <h1 className="text-2xl font-bold text-foreground uppercase tracking-wide">
                 {game.name}
               </h1>
+              <LiveClock />
               <div className="mt-1 flex items-center gap-3">
                 <span className="font-mono text-xs text-muted-foreground uppercase tracking-wider">
                   {game.provider}
