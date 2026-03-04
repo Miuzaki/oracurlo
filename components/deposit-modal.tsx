@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import {
   Dialog,
@@ -20,6 +20,7 @@ import {
   Copy,
   Check,
   QrCode,
+  CheckCircle2,
 } from "lucide-react";
 
 interface DepositModalProps {
@@ -29,25 +30,65 @@ interface DepositModalProps {
 
 interface DepositResponse {
   success: boolean;
-  transaction_id?: string;
-  payment_link?: string;
+  pix_code?: string;
   qr_code?: string;
-  br_code?: string;
-  value?: number;
+  transaction_id?: string;
   amount?: number;
-  amount_cents?: number;
-  user_id?: number;
+  value?: number;
 }
 
 const QUICK_AMOUNTS = [10, 25, 50, 100, 200, 500];
 
 export function DepositModal({ open, onOpenChange }: DepositModalProps) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, getAuthHeaders, checkSession } = useAuth();
   const [amount, setAmount] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [depositData, setDepositData] = useState<DepositResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [depositStatus, setDepositStatus] = useState<string | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Poll for deposit status when we have a transaction_id
+  useEffect(() => {
+    if (!depositData?.transaction_id || depositStatus === "approved") return;
+
+    const pollStatus = async () => {
+      try {
+        const res = await fetch("/api/deposit/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+          body: JSON.stringify({ transaction_id: depositData.transaction_id }),
+        });
+        const data = await res.json();
+        if (data.success && data.data?.status) {
+          setDepositStatus(data.data.status);
+          if (data.data.status === "approved" || data.data.status === "completed") {
+            setDepositStatus("approved");
+            // Refresh user balance
+            checkSession();
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+          }
+        }
+      } catch {
+        // ignore polling errors
+      }
+    };
+
+    pollingRef.current = setInterval(pollStatus, 5000);
+    // Also poll immediately
+    pollStatus();
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [depositData?.transaction_id, depositStatus, getAuthHeaders, checkSession]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,7 +109,7 @@ export function DepositModal({ open, onOpenChange }: DepositModalProps) {
     try {
       const res = await fetch("/api/deposit", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ amount: numAmount }),
       });
 
@@ -79,8 +120,9 @@ export function DepositModal({ open, onOpenChange }: DepositModalProps) {
         return;
       }
 
-      // The API response has the deposit info directly in data.data
+      // Response: { success, data: { pix_code, qr_code, transaction_id, amount, value } }
       setDepositData(data.data);
+      setDepositStatus("pending");
     } catch {
       setError("Erro de conexao com o servidor");
     } finally {
@@ -89,7 +131,7 @@ export function DepositModal({ open, onOpenChange }: DepositModalProps) {
   };
 
   const handleCopyCode = async () => {
-    const code = depositData?.br_code || depositData?.payment_link || "";
+    const code = depositData?.pix_code || "";
     if (!code) return;
     try {
       await navigator.clipboard.writeText(code);
@@ -102,10 +144,15 @@ export function DepositModal({ open, onOpenChange }: DepositModalProps) {
 
   const handleClose = (isOpen: boolean) => {
     if (!isOpen) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
       setDepositData(null);
       setAmount("");
       setError("");
       setCopied(false);
+      setDepositStatus(null);
     }
     onOpenChange(isOpen);
   };
@@ -117,26 +164,27 @@ export function DepositModal({ open, onOpenChange }: DepositModalProps) {
   // Show QR code / PIX result
   if (depositData) {
     const qrUrl = depositData.qr_code;
-    const brCode = depositData.br_code || depositData.payment_link || "";
-    const displayAmount =
-      depositData.amount != null
-        ? depositData.amount
-        : depositData.amount_cents != null
-          ? depositData.amount_cents / 100
-          : parseFloat(amount);
+    const pixCode = depositData.pix_code || "";
+    const displayAmount = depositData.amount ?? parseFloat(amount);
 
     return (
       <Dialog open={open} onOpenChange={handleClose}>
         <DialogContent className="sm:max-w-md border-border/50 bg-card">
           <DialogHeader className="items-center">
             <div className="relative flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/30 mb-2">
-              <QrCode className="h-6 w-6 text-primary" />
+              {depositStatus === "approved" ? (
+                <CheckCircle2 className="h-6 w-6 text-green-500" />
+              ) : (
+                <QrCode className="h-6 w-6 text-primary" />
+              )}
             </div>
             <DialogTitle className="text-xl text-foreground">
-              Deposito PIX
+              {depositStatus === "approved" ? "Deposito Confirmado!" : "Deposito PIX"}
             </DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              Escaneie o QR Code ou copie o codigo abaixo
+              {depositStatus === "approved"
+                ? "Seu deposito foi confirmado com sucesso."
+                : "Escaneie o QR Code ou copie o codigo abaixo"}
             </DialogDescription>
           </DialogHeader>
 
@@ -152,54 +200,70 @@ export function DepositModal({ open, onOpenChange }: DepositModalProps) {
               </span>
             </div>
 
-            {/* QR Code */}
-            {qrUrl && (
-              <div className="rounded-xl border border-border bg-foreground p-3">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={qrUrl}
-                  alt="QR Code PIX"
-                  className="h-48 w-48"
-                  crossOrigin="anonymous"
-                />
+            {depositStatus === "approved" ? (
+              <div className="flex flex-col items-center gap-2 py-4">
+                <CheckCircle2 className="h-16 w-16 text-green-500" />
+                <p className="text-sm text-muted-foreground">Saldo atualizado automaticamente.</p>
               </div>
-            )}
+            ) : (
+              <>
+                {/* QR Code */}
+                {qrUrl && (
+                  <div className="rounded-xl border border-border bg-foreground p-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={qrUrl}
+                      alt="QR Code PIX"
+                      className="h-48 w-48"
+                      crossOrigin="anonymous"
+                    />
+                  </div>
+                )}
 
-            <Separator className="bg-border" />
+                <Separator className="bg-border" />
 
-            {/* PIX Code */}
-            {brCode && (
-              <div className="flex w-full flex-col gap-2">
-                <Label className="text-xs text-muted-foreground">
-                  Codigo PIX Copia e Cola
-                </Label>
-                <div className="flex gap-2">
-                  <Input
-                    readOnly
-                    value={brCode}
-                    className="flex-1 border-border bg-secondary text-foreground text-xs"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCopyCode}
-                    className="shrink-0 border-border text-foreground hover:bg-secondary"
-                  >
-                    {copied ? (
-                      <Check className="h-4 w-4 text-primary" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-              </div>
-            )}
+                {/* PIX Code */}
+                {pixCode && (
+                  <div className="flex w-full flex-col gap-2">
+                    <Label className="text-xs text-muted-foreground">
+                      Codigo PIX Copia e Cola
+                    </Label>
+                    <div className="flex gap-2">
+                      <Input
+                        readOnly
+                        value={pixCode}
+                        className="flex-1 border-border bg-secondary text-foreground text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCopyCode}
+                        className="shrink-0 border-border text-foreground hover:bg-secondary"
+                      >
+                        {copied ? (
+                          <Check className="h-4 w-4 text-primary" />
+                        ) : (
+                          <Copy className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
-            {depositData.transaction_id && (
-              <p className="text-xs text-muted-foreground">
-                ID: {depositData.transaction_id}
-              </p>
+                {depositData.transaction_id && (
+                  <p className="text-xs text-muted-foreground">
+                    ID: {depositData.transaction_id}
+                  </p>
+                )}
+
+                {depositStatus === "pending" && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <span>Aguardando pagamento...</span>
+                  </div>
+                )}
+              </>
             )}
 
             <Button

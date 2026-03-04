@@ -1,116 +1,90 @@
-import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 
-const API_BASE = "https://oauth-routes-cactus.grupoautoma.com";
-const BRAND_SLUG = "apostatudo";
+const SUPABASE_URL = "https://dufiwjtermmxfpcpeixd.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR1Zml3anRlcm1teGZwY3BlaXhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ1ODc4NjAsImV4cCI6MjA3MDE2Mzg2MH0.lRw6CrAkjefy0mnSmdMYxFH6YRZI6j4-85WBh_hHCJE";
+
+function supabaseHeaders(): Record<string, string> {
+  return {
+    "Accept": "*/*",
+    "Content-Type": "application/json",
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+  };
+}
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const slug = searchParams.get("slug");
     const platform = searchParams.get("platform") || "WEB";
-    const useDemo = searchParams.get("use_demo") || "1";
-
-    console.log("[v0] ====== GET /api/games/start ======");
-    console.log("[v0] slug:", slug);
-    console.log("[v0] platform:", platform);
-    console.log("[v0] use_demo:", useDemo);
+    const useDemo = searchParams.get("use_demo") || "0";
 
     if (!slug) {
-      console.log("[v0] ERRO: slug ausente");
       return NextResponse.json(
         { success: false, message: "Slug do jogo e obrigatorio" },
         { status: 400 }
       );
     }
 
-    const cookieStore = await cookies();
-    const token = cookieStore.get("auth_token")?.value;
-    const userId = cookieStore.get("auth_user_id")?.value;
+    // Read auth data from custom headers
+    const bearerToken = request.headers.get("x-bearer-token");
+    const connectSid = request.headers.get("x-connect-sid");
 
-    console.log("[v0] Token presente:", !!token);
-    console.log("[v0] Token (primeiros 80 chars):", token ? token.substring(0, 80) + "..." : "NENHUM");
-    console.log("[v0] User ID do cookie:", userId || "NENHUM");
-
-    // List all cookies for debugging
-    const allCookies = cookieStore.getAll();
-    console.log("[v0] Todos os cookies:", allCookies.map(c => `${c.name}=${c.value.substring(0, 20)}...`));
-
-    if (!token) {
-      console.log("[v0] ERRO: nao autenticado - cookie auth_token nao encontrado");
+    if (!bearerToken || !connectSid) {
       return NextResponse.json(
         { success: false, message: "Nao autenticado. Faca login novamente." },
         { status: 401 }
       );
     }
 
-    const gameUrl = `${API_BASE}/api/start-game?slug=${encodeURIComponent(slug)}&platform=${encodeURIComponent(platform)}&use_demo=${encodeURIComponent(useDemo)}`;
-    console.log("[v0] Fazendo GET para:", gameUrl);
-
-    const requestHeaders: Record<string, string> = {
-      "Accept": "application/json, text/plain, */*",
-      "Authorization": `Bearer ${token}`,
-      "X-Brand-Slug": BRAND_SLUG,
-    };
-
-    if (userId) {
-      requestHeaders["X-Cactus-Cookie-Key"] = userId;
-    }
-
-    console.log("[v0] Headers enviados:", JSON.stringify({
-      ...requestHeaders,
-      Authorization: `Bearer ${token.substring(0, 40)}...`,
-    }));
-
-    const response = await fetch(gameUrl, {
-      method: "GET",
-      headers: requestHeaders,
-    });
-
-    console.log("[v0] start-game response status:", response.status);
-    console.log("[v0] start-game response ok:", response.ok);
-    console.log("[v0] start-game response headers:", JSON.stringify(Object.fromEntries(response.headers.entries())));
+    // Call Supabase Edge Function get-game-url
+    // gameSlug should be URL-encoded as per the curl (e.g. "pragmaticplay%2Fspeed-roulette-1")
+    const response = await fetch(
+      `${SUPABASE_URL}/functions/v1/get-game-url`,
+      {
+        method: "POST",
+        headers: supabaseHeaders(),
+        body: JSON.stringify({
+          bearerToken,
+          connectSid,
+          gameSlug: slug,
+          platform,
+          useDemo,
+        }),
+      }
+    );
 
     const responseText = await response.text();
-    console.log("[v0] start-game response body (primeiros 2000 chars):", responseText.substring(0, 2000));
+    console.log("[v0] get-game-url status:", response.status);
+    console.log("[v0] get-game-url response:", responseText.substring(0, 500));
 
-    if (!response.ok) {
-      console.log("[v0] ERRO: start-game falhou");
-      let errorData;
-      try {
-        errorData = JSON.parse(responseText);
-      } catch {
-        errorData = { message: responseText.substring(0, 200) };
-      }
-      return NextResponse.json(
-        { success: false, message: errorData?.message || "Erro ao iniciar jogo" },
-        { status: response.status }
-      );
-    }
-
-    let gameData;
+    let gameData: Record<string, unknown>;
     try {
       gameData = JSON.parse(responseText);
     } catch {
-      console.log("[v0] ERRO: nao foi possivel parsear JSON do start-game");
       return NextResponse.json(
         { success: false, message: "Resposta invalida do servidor de jogos" },
         { status: 502 }
       );
     }
 
-    console.log("[v0] gameData keys:", Object.keys(gameData));
-    console.log("[v0] gameData.url:", gameData?.url || gameData?.game_url || gameData?.data?.url || "N/A");
-    console.log("[v0] ====== start-game COMPLETO ======");
+    if (!response.ok || !gameData.success) {
+      return NextResponse.json(
+        { success: false, message: (gameData.message as string) || "Erro ao iniciar jogo" },
+        { status: response.status >= 400 ? response.status : 500 }
+      );
+    }
 
+    // Response format: { success, game_url }
     return NextResponse.json({
       success: true,
-      data: gameData,
+      data: {
+        game_url: gameData.game_url,
+      },
     });
   } catch (error) {
-    console.error("[v0] ====== ERRO CRITICO NO start-game ======");
-    console.error("[v0] Mensagem:", error instanceof Error ? error.message : String(error));
-    console.error("[v0] Stack:", error instanceof Error ? error.stack : "N/A");
+    console.error("[v0] Erro no start-game:", error instanceof Error ? error.message : String(error));
     return NextResponse.json(
       { success: false, message: "Erro interno do servidor" },
       { status: 500 }
