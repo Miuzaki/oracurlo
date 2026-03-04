@@ -6,27 +6,27 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 const BANNERS = [
   {
-    src: "/banners/banner-cadastro.PNG",
+    src: "/images/banners/cadastro.png",
     alt: "Oraculo Aviator - Cadastro",
     href: "https://go.aff.apostatudo.bet/hh390al4",
   },
   {
-    src: "/banners/banner-sup-wpp.PNG",
+    src: "/images/banners/supwpp.png",
     alt: "Oraculo Aviator - Suporte via WhatsApp",
     href: "https://wa.me/message/4X3VFADVY4R4K1",
   },
   {
-    src: "/banners/banner-wpp.PNG",
+    src: "/images/banners/wpp.png",
     alt: "Oraculo Aviator - WhatsApp",
     href: "https://chat.whatsapp.com/Cj45qRdflfn31EVAuGn4Bj",
   },
   {
-    src: "/banners/banner-instagram.PNG",
+    src: "/images/banners/instagram.png",
     alt: "Oraculo Aviator - Instagram",
     href: "https://www.instagram.com/icaro.aviator?igsh=MW9rMjhld3BuaGluZg==",
   },
   {
-    src: "/banners/banner-telegram.PNG",
+    src: "/images/banners/telegram.png",
     alt: "Oraculo Aviator - Telegram",
     href: "https://t.me/+VRZlvjIgh0fLwwf4",
   },
