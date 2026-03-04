@@ -325,7 +325,11 @@ type ActiveMinutagemProjection = {
 };
 
 function StrategyMinutagem10Panel({ results }: { results: AviatorResult[] }) {
-  const nowTick = Date.now();
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const data = useMemo(() => {
     const orderedDesc = [...results].sort(

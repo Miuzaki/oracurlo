@@ -4,12 +4,10 @@ import { NextRequest } from "next/server";
  * Aviator / Crash game upstream sources.
  *
  * aviator-spribe:
- *   - WebSocket at ws://100.81.79.127:8805/ws
- *     Returns JSON arrays like [{valor:"1.50x", hora:"14:30:00"}, ...]
+ *   - WS returns JSON arrays like [{valor:"1,50x", hora:"14:30:00"}, ...]
  *
  * red-baron-evolution:
- *   - WebSocket at wss://red.codehelpers.dev
- *     Returns {type:"new", data:[161.46, 12.56, 1.42, ...]}
+ *   - WS returns {type:"new", data:[161.46, 12.56, 1.42, ...]}
  */
 
 const SOURCES: Record<
@@ -32,8 +30,110 @@ export const dynamic = "force-dynamic";
 interface AviatorResult {
   id: number;
   multiplier: number;
-  timestamp: string;
+  timestamp: string; // ISO
   destaque: boolean;
+}
+
+function parseMultiplier(valor: string): number | null {
+  if (!valor) return null;
+  const clean = valor.replace(/x/gi, "").trim().replace(",", ".");
+  const m = Number.parseFloat(clean);
+  return Number.isFinite(m) ? m : null;
+}
+
+function parseHora(
+  hora: string,
+): { hh: number; mm: number; ss: number } | null {
+  if (!hora) return null;
+  const parts = hora.split(":");
+  if (parts.length !== 3) return null;
+
+  const hh = Number.parseInt(parts[0]!, 10);
+  const mm = Number.parseInt(parts[1]!, 10);
+  const ss = Number.parseInt(parts[2]!, 10);
+
+  if (
+    !Number.isFinite(hh) ||
+    !Number.isFinite(mm) ||
+    !Number.isFinite(ss) ||
+    hh < 0 ||
+    hh > 23 ||
+    mm < 0 ||
+    mm > 59 ||
+    ss < 0 ||
+    ss > 59
+  ) {
+    return null;
+  }
+
+  return { hh, mm, ss };
+}
+
+/**
+ * Reconstrói timestamps completos (com data) a partir de [{hora:"HH:mm:ss"}...]
+ * assumindo que o array vem em ordem DESC (mais recente primeiro).
+ *
+ * Regra:
+ * - usa "hoje" como base
+ * - conforme percorre itens mais antigos, se a hora do próximo item "aumentar"
+ *   em relação ao anterior (ex: 00:01 depois 23:59), cruzou meia-noite => subtrai 1 dia.
+ */
+function buildTimestampsFromHorasDesc(
+  raw: Array<{ valor: string; hora: string }>,
+  now: Date,
+): Array<{ multiplier: number; date: Date }> {
+  const out: Array<{ multiplier: number; date: Date }> = [];
+
+  // baseDate = hoje (local)
+  let base = new Date(now);
+  base.setMilliseconds(0);
+
+  // controle da hora anterior (em segundos do dia)
+  let prevSecOfDay: number | null = null;
+
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i]!;
+    const m = parseMultiplier(item.valor);
+    if (m == null) continue;
+
+    const h = parseHora(item.hora);
+    if (!h) continue;
+
+    const secOfDay = h.hh * 3600 + h.mm * 60 + h.ss;
+
+    // Se a hora "aumentou" indo para trás no histórico, cruzou meia-noite => volta 1 dia
+    // Ex (desc): 00:00:10, 23:59:40  => secOfDay (10) -> (86380) aumentou, então -1 dia
+    if (prevSecOfDay != null && secOfDay > prevSecOfDay) {
+      base = new Date(base.getTime() - 24 * 60 * 60 * 1000);
+      base.setMilliseconds(0);
+    }
+    prevSecOfDay = secOfDay;
+
+    const d = new Date(base);
+    d.setHours(h.hh, h.mm, h.ss, 0);
+
+    // Se por algum motivo ainda ficou no futuro (clock/latência), puxa 1 dia
+    // (tolerância de 2 minutos)
+    if (d.getTime() > now.getTime() + 2 * 60 * 1000) {
+      d.setDate(d.getDate() - 1);
+    }
+
+    out.push({ multiplier: m, date: d });
+  }
+
+  return out;
+}
+
+/**
+ * ID determinístico baseado em timestamp(ms) + multiplier(centésimos).
+ * Evita mudar id toda vez que o WS reenvia o histórico.
+ */
+function makeStableId(date: Date, multiplier: number): number {
+  const ms = date.getTime();
+  const mult = Math.round(multiplier * 100); // centésimos
+  // hash simples dentro do range safe do JS number
+  const h = (ms % 2_000_000_000) * 1000 + (mult % 1000);
+  return h;
 }
 
 export async function GET(req: NextRequest) {
@@ -87,12 +187,10 @@ export async function GET(req: NextRequest) {
       }
 
       try {
-        if (source.kind === "ws_aviator") {
-          // Connect to upstream WS
-          const { default: WebSocket } = await import("ws");
-          const ws = new WebSocket(source.url);
+        const { default: WebSocket } = await import("ws");
 
-          let lastId = 0;
+        if (source.kind === "ws_aviator") {
+          const ws = new WebSocket(source.url);
 
           ws.on("open", () => {
             send("connected", { channel_id: channelId, status: "connected" });
@@ -107,38 +205,20 @@ export async function GET(req: NextRequest) {
               if (!Array.isArray(raw) || raw.length === 0) return;
 
               const now = new Date();
-              const results: AviatorResult[] = [];
 
-              for (let i = 0; i < raw.length; i++) {
-                const item = raw[i];
-                const val = item.valor?.replace("x", "")?.replace(",", ".");
-                const m = parseFloat(val);
-                if (isNaN(m)) continue;
+              const built = buildTimestampsFromHorasDesc(raw, now);
 
-                lastId++;
-
-                let timestamp = now.toISOString();
-                if (item.hora) {
-                  const parts = item.hora.split(":");
-                  if (parts.length === 3) {
-                    const d = new Date(now);
-                    d.setHours(
-                      parseInt(parts[0], 10),
-                      parseInt(parts[1], 10),
-                      parseInt(parts[2], 10),
-                      0,
-                    );
-                    timestamp = d.toISOString();
-                  }
-                }
-
-                results.push({
-                  id: lastId,
-                  multiplier: m,
-                  timestamp,
-                  destaque: m >= 10,
-                });
-              }
+              const results: AviatorResult[] = built.map(
+                ({ multiplier, date }) => {
+                  const timestamp = date.toISOString();
+                  return {
+                    id: makeStableId(date, multiplier),
+                    multiplier,
+                    timestamp,
+                    destaque: multiplier >= 10,
+                  };
+                },
+              );
 
               if (results.length > 0) {
                 send("history", { channel_id: channelId, results });
@@ -157,17 +237,14 @@ export async function GET(req: NextRequest) {
             cleanup();
           });
 
-          // Clean up when client disconnects
           req.signal.addEventListener("abort", () => {
-            ws.close();
+            try {
+              ws.close();
+            } catch {}
             cleanup();
           });
         } else if (source.kind === "ws_redbaron") {
-          // Connect to Red Baron upstream WSS
-          const { default: WebSocket } = await import("ws");
           const ws = new WebSocket(source.url);
-
-          let globalId = 0;
 
           ws.on("open", () => {
             send("connected", { channel_id: channelId, status: "connected" });
@@ -177,21 +254,21 @@ export async function GET(req: NextRequest) {
             try {
               const parsed = JSON.parse(rawMsg.toString());
 
-              // Red Baron sends {type:"new", data:[161.46, 12.56, ...]}
               if (parsed.type === "new" && Array.isArray(parsed.data)) {
                 const now = new Date();
                 const results: AviatorResult[] = [];
 
                 for (let i = 0; i < parsed.data.length; i++) {
-                  const m = parseFloat(parsed.data[i]);
-                  if (isNaN(m)) continue;
-                  globalId++;
+                  const m = Number.parseFloat(parsed.data[i]);
+                  if (!Number.isFinite(m)) continue;
+
+                  const date = new Date(now.getTime() - i * 30000);
+                  date.setMilliseconds(0);
+
                   results.push({
-                    id: globalId,
+                    id: makeStableId(date, m),
                     multiplier: m,
-                    timestamp: new Date(
-                      now.getTime() - i * 30000,
-                    ).toISOString(),
+                    timestamp: date.toISOString(),
                     destaque: m >= 10,
                   });
                 }
@@ -215,7 +292,9 @@ export async function GET(req: NextRequest) {
           });
 
           req.signal.addEventListener("abort", () => {
-            ws.close();
+            try {
+              ws.close();
+            } catch {}
             cleanup();
           });
         }
