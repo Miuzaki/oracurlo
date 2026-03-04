@@ -6,19 +6,29 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 const BANNERS = [
   {
-    src: "/banners/finance.png",
-    alt: "Oraculo Aviator - Controle, Estrategia, Crescimento",
-    href: "https://go.aff.apostatudo.bet/d7qp7e8v",
+    src: "/banners/banner-cadastro.PNG",
+    alt: "Oraculo Aviator - Cadastro",
+    href: "https://go.aff.apostatudo.bet/hh390al4",
   },
   {
-    src: "/banners/instagram.png",
-    alt: "Siga no Instagram",
-    href: "https://www.instagram.com/danigreen22?igsh=b3JmdzVqeTd1NzB4",
+    src: "/banners/banner-sup-wpp.PNG",
+    alt: "Oraculo Aviator - Suporte via WhatsApp",
+    href: "https://wa.me/message/4X3VFADVY4R4K1",
   },
   {
-    src: "/banners/youtube.png",
-    alt: "Canal no YouTube",
-    href: "https://youtube.com/@danigreenyt?si=h14v1hhsCJGSHYWc",
+    src: "/banners/banner-wpp.PNG",
+    alt: "Oraculo Aviator - WhatsApp",
+    href: "https://chat.whatsapp.com/Cj45qRdflfn31EVAuGn4Bj",
+  },
+  {
+    src: "/banners/banner-instagram.PNG",
+    alt: "Oraculo Aviator - Instagram",
+    href: "https://www.instagram.com/icaro.aviator?igsh=MW9rMjhld3BuaGluZg==",
+  },
+  {
+    src: "/banners/banner-telegram.PNG",
+    alt: "Oraculo Aviator - Telegram",
+    href: "https://t.me/+VRZlvjIgh0fLwwf4",
   },
 ];
 
