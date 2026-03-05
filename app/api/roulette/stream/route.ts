@@ -14,7 +14,7 @@ const SOURCES: Record<
 > = {
   "aviator-spribe": {
     kind: "ws_aviator",
-    url: "wss://1652-2804-54-c100-1-5cf4-cad1-21c6-523b.ngrok-free.app/ws",
+    url: "ws://100.81.79.127:8805/ws",
   },
   "red-baron-evolution": {
     kind: "ws_redbaron",
