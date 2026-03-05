@@ -14,7 +14,7 @@ const SOURCES: Record<
 > = {
   "aviator-spribe": {
     kind: "ws_aviator",
-    url: "wss://history.oraculoavitor.com.br//ws",
+    url: "wss://1652-2804-54-c100-1-5cf4-cad1-21c6-523b.ngrok-free.app/ws",
   },
   "red-baron-evolution": {
     kind: "ws_redbaron",
