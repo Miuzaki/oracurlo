@@ -119,20 +119,80 @@ function addDaysYMD(
   };
 }
 
+const FUTURE_TOLERANCE_MS = 2 * 60_000;
+
+function getUtcYMD(now: Date): { y: number; m: number; d: number } {
+  return {
+    y: now.getUTCFullYear(),
+    m: now.getUTCMonth() + 1,
+    d: now.getUTCDate(),
+  };
+}
+
+function makeDateFromUTCClock(
+  y: number,
+  m: number,
+  d: number,
+  hh: number,
+  mm: number,
+  ss: number,
+): Date {
+  return new Date(Date.UTC(y, m - 1, d, hh, mm, ss, 0));
+}
+
+function adjustBackOneDayIfFuture(date: Date, now: Date): Date {
+  if (date.getTime() > now.getTime() + FUTURE_TOLERANCE_MS) {
+    return new Date(date.getTime() - 24 * 60 * 60_000);
+  }
+  return date;
+}
+
+type HoraTZ = "utc" | "sp";
+
 /**
- * Reconstrói timestamps completos assumindo raw em ordem DESC (mais recente primeiro),
- * usando "data de SP" como base e tratando virada de meia-noite.
+ * Decide se o "hora" vindo do WS está em UTC ou em SP
+ * (escolhe o que gera um timestamp mais próximo do now real)
  */
-function buildTimestampsFromHorasDescSP(
+function guessHoraTZ(
+  raw: Array<{ valor: string; hora: string }>,
+  now: Date,
+): HoraTZ {
+  const first = raw[0];
+  if (!first) return "sp";
+
+  const h = parseHora(first.hora);
+  if (!h) return "sp";
+
+  const sp = getSaoPauloYMD(now);
+  const utc = getUtcYMD(now);
+
+  const candSP = adjustBackOneDayIfFuture(
+    makeDateFromSPLocal(sp.y, sp.m, sp.d, h.hh, h.mm, h.ss),
+    now,
+  );
+
+  const candUTC = adjustBackOneDayIfFuture(
+    makeDateFromUTCClock(utc.y, utc.m, utc.d, h.hh, h.mm, h.ss),
+    now,
+  );
+
+  const diffSP = Math.abs(candSP.getTime() - now.getTime());
+  const diffUTC = Math.abs(candUTC.getTime() - now.getTime());
+
+  return diffUTC <= diffSP ? "utc" : "sp";
+}
+
+function buildTimestampsFromHorasDesc(
   raw: Array<{ valor: string; hora: string }>,
   now: Date,
 ): Array<{ multiplier: number; date: Date }> {
   const out: Array<{ multiplier: number; date: Date }> = [];
 
-  // base = "hoje em SP"
-  let { y, m, d } = getSaoPauloYMD(now);
+  const tz = guessHoraTZ(raw, now);
 
-  // controle da hora anterior (segundos do dia)
+  let base = tz === "sp" ? getSaoPauloYMD(now) : getUtcYMD(now);
+  let { y, m, d } = base;
+
   let prevSecOfDay: number | null = null;
 
   for (let i = 0; i < raw.length; i++) {
@@ -145,7 +205,7 @@ function buildTimestampsFromHorasDescSP(
 
     const secOfDay = h.hh * 3600 + h.mm * 60 + h.ss;
 
-    // se "voltando no histórico" a hora aumentar => cruzou meia-noite (volta 1 dia)
+    // Desc (mais recente -> mais antigo): se hora "aumenta", virou o dia
     if (prevSecOfDay != null && secOfDay > prevSecOfDay) {
       const back = addDaysYMD(y, m, d, -1);
       y = back.y;
@@ -154,22 +214,12 @@ function buildTimestampsFromHorasDescSP(
     }
     prevSecOfDay = secOfDay;
 
-    const date = makeDateFromSPLocal(y, m, d, h.hh, h.mm, h.ss);
+    const dateRaw =
+      tz === "sp"
+        ? makeDateFromSPLocal(y, m, d, h.hh, h.mm, h.ss)
+        : makeDateFromUTCClock(y, m, d, h.hh, h.mm, h.ss);
 
-    // proteção extra: se ainda ficar no futuro em relação ao now real, volta 1 dia
-    if (date.getTime() > now.getTime() + 2 * 60 * 1000) {
-      const back = addDaysYMD(y, m, d, -1);
-      const fixed = makeDateFromSPLocal(
-        back.y,
-        back.m,
-        back.d,
-        h.hh,
-        h.mm,
-        h.ss,
-      );
-      out.push({ multiplier: mult, date: fixed });
-      continue;
-    }
+    const date = adjustBackOneDayIfFuture(dateRaw, now);
 
     out.push({ multiplier: mult, date });
   }
@@ -245,7 +295,7 @@ export async function GET(req: NextRequest) {
               if (!Array.isArray(raw) || raw.length === 0) return;
 
               const now = new Date();
-              const built = buildTimestampsFromHorasDescSP(raw, now);
+              const built = buildTimestampsFromHorasDesc(raw, now);
 
               const results: AviatorResult[] = built.map(
                 ({ multiplier, date }) => ({
