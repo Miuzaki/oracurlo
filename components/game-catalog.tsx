@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Play, Activity, Plane } from "lucide-react";
+import { Play, Activity, Plane, Dices } from "lucide-react";
 
 export type GameBadge =
   | "ao-vivo"
@@ -70,10 +70,11 @@ export interface GameInfo {
   channelId: string;
   image: string;
   badge: GameBadge;
+  kind: "crash" | "bacbo";
   icon?: React.ReactNode;
 }
 
-export const CRASH_GAMES: GameInfo[] = [
+export const LIVE_GAMES: GameInfo[] = [
   {
     id: "spribe-aviator",
     slug: "spribe/aviator",
@@ -83,6 +84,18 @@ export const CRASH_GAMES: GameInfo[] = [
     image: "/images/games/aviator.jpeg",
     icon: <Plane className="h-7 w-7" />,
     badge: "ao-vivo",
+    kind: "crash",
+  },
+  {
+    id: "evolution-bac-bo",
+    slug: "evolution/bac-bo",
+    name: "Bac Bo",
+    provider: "Evolution",
+    channelId: "bacbo-evolution",
+    image: "/images/games/bac-bo.png",
+    icon: <Dices className="h-7 w-7" />,
+    badge: "ao-vivo",
+    kind: "bacbo",
   },
 ];
 
@@ -179,13 +192,13 @@ function GameInfoCard({ game }: { game: GameInfo }) {
 }
 
 export function GameCatalog() {
-  const liveCount = CRASH_GAMES.filter((g) => g.badge === "ao-vivo").length;
+  const liveCount = LIVE_GAMES.filter((g) => g.badge === "ao-vivo").length;
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-10">
       <div className="mb-6 flex items-center gap-3">
         <Activity className="h-5 w-5 text-primary" />
-        <h2 className="text-xl font-bold text-foreground">Crash Games</h2>
+        <h2 className="text-xl font-bold text-foreground">Jogos ao Vivo</h2>
         {liveCount > 0 && (
           <Badge
             variant="outline"
@@ -197,7 +210,7 @@ export function GameCatalog() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-3">
-        {CRASH_GAMES.map((game) => (
+        {LIVE_GAMES.map((game) => (
           <GameInfoCard key={game.id} game={game} />
         ))}
       </div>

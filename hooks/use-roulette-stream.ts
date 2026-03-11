@@ -1,5 +1,124 @@
+"use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 
+export interface AviatorResult {
+  id: number;
+  multiplier: number;
+  timestamp: string;
+  destaque: boolean;
+}
+
+export interface BacBoHistoryItem {
+  winner: "player" | "banker" | "tie" | string;
+  playerScore: number;
+  bankerScore: number;
+}
+
+export interface BacBoStats {
+  playerWins: number;
+  bankerWins: number;
+  ties: number;
+}
+
+export function useLiveGameStream(
+  channelId: string | null,
+  kind: "crash" | "bacbo" | null,
+) {
+  const [connected, setConnected] = useState(false);
+  const [results, setResults] = useState<AviatorResult[]>([]);
+  const [bacboHistory, setBacboHistory] = useState<BacBoHistoryItem[]>([]);
+  const [bacboStats, setBacboStats] = useState<BacBoStats | null>(null);
+
+  const esRef = useRef<EventSource | null>(null);
+  const retryRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setConnected(false);
+    setResults([]);
+    setBacboHistory([]);
+    setBacboStats(null);
+
+    if (!channelId || !kind) return;
+
+    const connect = () => {
+      if (esRef.current) {
+        esRef.current.close();
+        esRef.current = null;
+      }
+
+      const es = new EventSource(
+        `/api/roulette/stream?channel_id=${encodeURIComponent(channelId)}`,
+      );
+
+      esRef.current = es;
+
+      es.addEventListener("connected", () => {
+        setConnected(true);
+      });
+
+      es.addEventListener("history", (event) => {
+        try {
+          const msg = JSON.parse((event as MessageEvent).data);
+
+          if (kind === "crash" && Array.isArray(msg.results)) {
+            setResults(msg.results);
+            return;
+          }
+
+          if (kind === "bacbo") {
+            if (Array.isArray(msg.history)) {
+              setBacboHistory([...msg.history].reverse());
+            }
+            if (msg.stats) {
+              setBacboStats(msg.stats);
+            }
+          }
+        } catch {}
+      });
+
+      es.addEventListener("new", (event) => {
+        try {
+          const msg = JSON.parse((event as MessageEvent).data);
+
+          if (kind === "bacbo") {
+            if (Array.isArray(msg.history)) {
+              setBacboHistory([...msg.history].reverse());
+            }
+            if (msg.stats) {
+              setBacboStats(msg.stats);
+            }
+          }
+        } catch {}
+      });
+
+      es.onerror = () => {
+        setConnected(false);
+        es.close();
+
+        if (retryRef.current) window.clearTimeout(retryRef.current);
+        retryRef.current = window.setTimeout(connect, 5000);
+      };
+
+      es.addEventListener("disconnected", () => {
+        setConnected(false);
+      });
+    };
+
+    connect();
+
+    return () => {
+      if (retryRef.current) window.clearTimeout(retryRef.current);
+      if (esRef.current) esRef.current.close();
+    };
+  }, [channelId, kind]);
+
+  return {
+    connected,
+    results,
+    bacboHistory,
+    bacboStats,
+  };
+}
 export interface AviatorResult {
   id: number;
   multiplier: number;

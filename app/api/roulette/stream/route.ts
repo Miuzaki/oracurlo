@@ -10,7 +10,7 @@ import { NextRequest } from "next/server";
 
 const SOURCES: Record<
   string,
-  { kind: "ws_aviator" | "ws_redbaron"; url: string }
+  { kind: "ws_aviator" | "ws_redbaron" | "ws_bacbo"; url: string }
 > = {
   "aviator-spribe": {
     kind: "ws_aviator",
@@ -20,11 +20,41 @@ const SOURCES: Record<
     kind: "ws_redbaron",
     url: "wss://red.codehelpers.dev",
   },
+  "bacbo-evolution": {
+    kind: "ws_bacbo",
+    url: "wss://ws-historylab.codehelpers.dev/ws?account=conta02&game=evolution/bac-bo",
+  },
 };
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+interface BacBoHistoryItem {
+  winner: "player" | "banker" | "tie" | string;
+  playerScore: number;
+  bankerScore: number;
+}
 
+interface BacBoStats {
+  playerWins: number;
+  bankerWins: number;
+  ties: number;
+}
+
+interface BacBoRoadPayload {
+  type?: string;
+  id?: string;
+  time?: number;
+  args?: {
+    stats?: BacBoStats;
+    history?: BacBoHistoryItem[];
+    restore?: boolean;
+  };
+}
+function isBacBoRoadPayload(data: unknown): data is BacBoRoadPayload {
+  if (!data || typeof data !== "object") return false;
+  const d = data as BacBoRoadPayload;
+  return d.type === "bacbo.road" || Array.isArray(d.args?.history);
+}
 interface AviatorResult {
   id: number;
   multiplier: number;
@@ -309,6 +339,60 @@ export async function GET(req: NextRequest) {
               if (results.length > 0) {
                 send("history", { channel_id: channelId, results });
               }
+            } catch {
+              // ignore
+            }
+          });
+
+          ws.on("error", () => {
+            send("error", { message: "upstream connection error" });
+          });
+
+          ws.on("close", () => {
+            send("disconnected", { message: "upstream disconnected" });
+            cleanup();
+          });
+
+          req.signal.addEventListener("abort", () => {
+            try {
+              ws.close();
+            } catch {}
+            cleanup();
+          });
+        } else if (source.kind === "ws_bacbo") {
+          const ws = new WebSocket(source.url);
+
+          ws.on("open", () => {
+            send("connected", { channel_id: channelId, status: "connected" });
+          });
+
+          ws.on("message", (rawMsg: Buffer | string) => {
+            try {
+              const parsed = JSON.parse(rawMsg.toString());
+
+              const eventType =
+                typeof parsed?.event === "string" ? parsed.event : "message";
+
+              const payload = parsed?.data ?? parsed;
+
+              if (!isBacBoRoadPayload(payload)) return;
+
+              const history = Array.isArray(payload.args?.history)
+                ? payload.args!.history!
+                : [];
+
+              const stats = payload.args?.stats ?? {
+                playerWins: 0,
+                bankerWins: 0,
+                ties: 0,
+              };
+
+              send(eventType === "new" ? "new" : "history", {
+                channel_id: channelId,
+                history,
+                stats,
+                raw: payload,
+              });
             } catch {
               // ignore
             }

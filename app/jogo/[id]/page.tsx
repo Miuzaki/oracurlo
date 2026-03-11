@@ -7,16 +7,19 @@ import { useAuth } from "@/contexts/auth-context";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import {
-  CRASH_GAMES as GAMES,
+  LIVE_GAMES as GAMES,
   getMultiplierColor,
   getMultiplierRingColor,
 } from "@/components/game-catalog";
 import {
-  useAviatorStream,
+  useLiveGameStream,
   type AviatorResult,
+  type BacBoHistoryItem,
+  type BacBoStats,
 } from "@/hooks/use-roulette-stream";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { LoginModal } from "@/components/login-modal";
 import {
   Select,
@@ -44,6 +47,11 @@ import {
   AlertTriangle,
   MousePointerClick,
   Eraser,
+  Users,
+  Landmark,
+  Equal,
+  Swords,
+  Dices,
 } from "lucide-react";
 import { LiveClock } from "@/components/live-clock";
 
@@ -53,6 +61,27 @@ import { LiveClock } from "@/components/live-clock";
 
 type StrategyMode = "default" | "minutagem10" | "roxas";
 type MultiplierFilter = "all" | "5x" | "10x" | "50x" | "100x" | "1000x";
+
+type BacBoSide = "Azul" | "Vermelho" | "Empate";
+
+type BacBoStrategyValue =
+  | "default"
+  | "pattern212"
+  | "alt2x"
+  | "alternating"
+  | "noEmpate10";
+
+interface BacBoStrategySignal {
+  strategy: BacBoStrategyValue;
+  active: boolean;
+  entry?: BacBoSide;
+  confidenceLabel?: string;
+  title: string;
+  description: string;
+  reasonLines: string[];
+  progression?: number[];
+  triggerCount?: number;
+}
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -78,10 +107,6 @@ function isSameLocalDay(a: Date, b: Date) {
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
   );
-}
-
-function minuteDiffAbs(a: Date, b: Date) {
-  return Math.abs(a.getTime() - b.getTime()) / 60_000;
 }
 
 function applyMultiplierFilter(
@@ -115,6 +140,261 @@ function isPurple(r: AviatorResult) {
 
 function isPink(r: AviatorResult) {
   return r.multiplier >= 10;
+}
+
+/* =========================================================
+ * Bac Bo Helpers
+ * =======================================================*/
+
+function normalizeBacBoWinner(winner: string): BacBoSide | null {
+  const w = (winner || "").toLowerCase();
+  if (w === "player") return "Azul";
+  if (w === "banker") return "Vermelho";
+  if (w === "tie") return "Empate";
+  return null;
+}
+
+function oppositeSide(side: BacBoSide): BacBoSide {
+  if (side === "Azul") return "Vermelho";
+  if (side === "Vermelho") return "Azul";
+  return "Empate";
+}
+
+function getBacBoNonEmpateSequence(
+  history: BacBoHistoryItem[],
+  limit = 100,
+): BacBoSide[] {
+  const out: BacBoSide[] = [];
+  for (const item of history.slice(0, limit)) {
+    const w = normalizeBacBoWinner(item.winner);
+    if (!w || w === "Empate") continue;
+    out.push(w);
+  }
+  return out;
+}
+
+function countRoundsWithoutEmpate(history: BacBoHistoryItem[]): number {
+  let count = 0;
+  for (const item of history) {
+    const w = normalizeBacBoWinner(item.winner);
+    if (w === "Empate") break;
+    count++;
+  }
+  return count;
+}
+
+function buildBacBoStrategySignal(
+  history: BacBoHistoryItem[],
+  strategy: BacBoStrategyValue,
+): BacBoStrategySignal | null {
+  if (strategy === "default") {
+    return {
+      strategy,
+      active: false,
+      title: "Padrao Bac Bo",
+      description: "Somente visualizacao do historico, sem sinal operacional.",
+      reasonLines: ["Selecione uma estrategia para gerar entrada."],
+    };
+  }
+
+  if (!history.length) {
+    return {
+      strategy,
+      active: false,
+      title: "Sem dados",
+      description: "Aguardando historico do Bac Bo.",
+      reasonLines: ["Ainda nao ha rodadas para analisar."],
+    };
+  }
+
+  const nonEmpate = getBacBoNonEmpateSequence(history, 100);
+
+  if (strategy === "pattern212") {
+    if (nonEmpate.length < 5) {
+      return {
+        strategy,
+        active: false,
+        title: "Padrao 2 . 1 . 2",
+        description: "Busca sequencia A A B A A.",
+        reasonLines: ["Necessario pelo menos 5 resultados sem empate."],
+      };
+    }
+
+    const [a1, a2, b, a3, a4] = nonEmpate.slice(0, 5);
+    const is212 = a1 === a2 && a3 === a4 && a1 === a3 && b !== a1;
+
+    if (is212) {
+      return {
+        strategy,
+        active: true,
+        entry: b,
+        confidenceLabel: "Padrao detectado",
+        title: "Padrao 2 . 1 . 2",
+        description:
+          "Detectado bloco 2-1-2. Entrada sugerida no lado da quebra central.",
+        reasonLines: [
+          `Ultimos 5: ${a1}, ${a2}, ${b}, ${a3}, ${a4}`,
+          `Entrada sugerida: ${b}`,
+        ],
+      };
+    }
+
+    return {
+      strategy,
+      active: false,
+      title: "Padrao 2 . 1 . 2",
+      description: "Busca sequencia A A B A A.",
+      reasonLines: [
+        `Ultimos 5 sem empate: ${nonEmpate.slice(0, 5).join(" / ")}`,
+        "Padrao nao identificado agora.",
+      ],
+    };
+  }
+
+  if (strategy === "alt2x") {
+    if (nonEmpate.length < 2) {
+      return {
+        strategy,
+        active: false,
+        title: "Alternancia 2x",
+        description: "Se bateu 2x no mesmo lado, entra no oposto.",
+        reasonLines: ["Necessario pelo menos 2 resultados sem empate."],
+      };
+    }
+
+    const [r1, r2] = nonEmpate.slice(0, 2);
+
+    if (r1 === r2) {
+      const entry = oppositeSide(r1);
+      return {
+        strategy,
+        active: true,
+        entry,
+        confidenceLabel: "2x consecutivos",
+        title: "Alternancia 2x",
+        description: "Apos 2 resultados iguais, entra no lado oposto.",
+        reasonLines: [`Ultimos 2: ${r1}, ${r2}`, `Entrada sugerida: ${entry}`],
+      };
+    }
+
+    return {
+      strategy,
+      active: false,
+      title: "Alternancia 2x",
+      description: "Se bateu 2x no mesmo lado, entra no oposto.",
+      reasonLines: [`Ultimos 2: ${r1}, ${r2}`, "Nao houve repeticao de 2x."],
+    };
+  }
+
+  if (strategy === "alternating") {
+    if (nonEmpate.length < 1) {
+      return {
+        strategy,
+        active: false,
+        title: "Alternancia continua",
+        description: "Sempre entra no lado oposto ao ultimo resultado.",
+        reasonLines: ["Necessario pelo menos 1 resultado sem empate."],
+      };
+    }
+
+    const [last] = nonEmpate;
+    const entry = oppositeSide(last);
+
+    return {
+      strategy,
+      active: true,
+      entry,
+      confidenceLabel: "Entrada continua",
+      title: "Alternancia continua",
+      description: "Saiu um lado, entra no oposto na proxima rodada.",
+      reasonLines: [`Ultimo resultado: ${last}`, `Entrada sugerida: ${entry}`],
+    };
+  }
+
+  if (strategy === "noEmpate10") {
+    const withoutEmpate = countRoundsWithoutEmpate(history);
+    const active = withoutEmpate >= 10;
+
+    if (active) {
+      return {
+        strategy,
+        active: true,
+        entry: "Empate",
+        confidenceLabel: "Gatilho atingido",
+        title: "Ausencia de empate",
+        description: "Sem empate por 10+ rodadas. Entrar 3x no empate.",
+        reasonLines: [
+          `Rodadas sem empate: ${withoutEmpate}`,
+          "Progressao: 10 / 20 / 40",
+        ],
+        progression: [10, 20, 40],
+        triggerCount: withoutEmpate,
+      };
+    }
+
+    return {
+      strategy,
+      active: false,
+      title: "Ausencia de empate",
+      description: "Ativa apos 10 rodadas sem empate.",
+      reasonLines: [
+        `Rodadas sem empate atualmente: ${withoutEmpate}`,
+        `Faltam ${Math.max(0, 10 - withoutEmpate)} rodada(s)`,
+      ],
+      progression: [10, 20, 40],
+      triggerCount: withoutEmpate,
+    };
+  }
+
+  return null;
+}
+
+function bacBoWinnerMeta(winner: string) {
+  const w = (winner || "").toLowerCase();
+
+  if (w === "player") {
+    return {
+      label: "Azul",
+      className: "border-blue-500/40 bg-blue-500/10 text-blue-300",
+      dot: "bg-blue-400",
+      icon: <Users className="h-3.5 w-3.5" />,
+    };
+  }
+
+  if (w === "banker") {
+    return {
+      label: "Vermelho",
+      className: "border-red-500/40 bg-red-500/10 text-red-300",
+      dot: "bg-red-400",
+      icon: <Landmark className="h-3.5 w-3.5" />,
+    };
+  }
+
+  return {
+    label: "Empate",
+    className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+    dot: "bg-emerald-400",
+    icon: <Equal className="h-3.5 w-3.5" />,
+  };
+}
+
+function bacBoEntryBadgeMeta(side?: BacBoSide) {
+  if (side === "Azul") {
+    return {
+      label: "Entrar no Azul",
+      className: "border-blue-500/40 bg-blue-500/10 text-blue-300",
+    };
+  }
+  if (side === "Vermelho") {
+    return {
+      label: "Entrar no Vermelho",
+      className: "border-red-500/40 bg-red-500/10 text-red-300",
+    };
+  }
+  return {
+    label: "Entrar no Empate",
+    className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  };
 }
 
 /* =========================================================
@@ -257,7 +537,7 @@ function DayMetricsBlock({ results }: { results: AviatorResult[] }) {
 }
 
 /* =========================================================
- * Filtros de multiplicador (corretos)
+ * Filtros de multiplicador
  * =======================================================*/
 
 function MultiplierFilters({
@@ -327,6 +607,7 @@ type ActiveMinutagemProjection = {
 
 function StrategyMinutagem10Panel({ results }: { results: AviatorResult[] }) {
   const [nowTick, setNowTick] = useState(() => Date.now());
+
   useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(t);
@@ -524,13 +805,13 @@ function StrategyMinutagem10Panel({ results }: { results: AviatorResult[] }) {
                   >
                     <div className="font-mono text-xs text-foreground">
                       Rosa em{" "}
-                      <span className="text-primary font-bold">
+                      <span className="font-bold text-primary">
                         {p.sourceTime}
                       </span>{" "}
                       <span className="text-emerald-500">
                         ({p.sourceMultiplier.toFixed(2)}x) → entrada{" "}
                       </span>
-                      <span className="text-emerald-500 font-bold">
+                      <span className="font-bold text-emerald-500">
                         {p.targetCenterLabel}
                       </span>
                     </div>
@@ -793,6 +1074,272 @@ function StrategyVelasRoxasPanel({
 }
 
 /* =========================================================
+ * Bac Bo UI
+ * =======================================================*/
+
+function BacBoStatsPanel({
+  stats,
+  history,
+}: {
+  stats: BacBoStats | null;
+  history: BacBoHistoryItem[];
+}) {
+  const computed = useMemo(() => {
+    if (stats) return stats;
+
+    let playerWins = 0;
+    let bankerWins = 0;
+    let ties = 0;
+
+    for (const item of history) {
+      const w = (item.winner || "").toLowerCase();
+      if (w === "player") playerWins++;
+      else if (w === "banker") bankerWins++;
+      else if (w === "tie") ties++;
+    }
+
+    return { playerWins, bankerWins, ties };
+  }, [stats, history]);
+
+  const total = computed.playerWins + computed.bankerWins + computed.ties;
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-3">
+      <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
+        <div className="flex items-center gap-2 text-blue-300">
+          <Users className="h-4 w-4" />
+          <span className="text-xs uppercase tracking-wider">Azul</span>
+        </div>
+        <div className="mt-1 text-xl font-bold text-foreground">
+          {computed.playerWins}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {total > 0 ? ((computed.playerWins / total) * 100).toFixed(0) : 0}%
+        </p>
+      </div>
+
+      <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+        <div className="flex items-center gap-2 text-red-300">
+          <Landmark className="h-4 w-4" />
+          <span className="text-xs uppercase tracking-wider">Vermelho</span>
+        </div>
+        <div className="mt-1 text-xl font-bold text-foreground">
+          {computed.bankerWins}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {total > 0 ? ((computed.bankerWins / total) * 100).toFixed(0) : 0}%
+        </p>
+      </div>
+
+      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+        <div className="flex items-center gap-2 text-emerald-300">
+          <Equal className="h-4 w-4" />
+          <span className="text-xs uppercase tracking-wider">Empate</span>
+        </div>
+        <div className="mt-1 text-xl font-bold text-foreground">
+          {computed.ties}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {total > 0 ? ((computed.ties / total) * 100).toFixed(0) : 0}%
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function BacBoStrategyPanel({
+  strategy,
+  signal,
+}: {
+  strategy: BacBoStrategyValue;
+  signal: BacBoStrategySignal | null;
+}) {
+  if (strategy === "default") return null;
+
+  if (!signal) {
+    return (
+      <div className="rounded-lg border border-border/40 bg-background/40 p-3">
+        <p className="text-sm text-muted-foreground">
+          Sem dados suficientes para gerar sinal do Bac Bo.
+        </p>
+      </div>
+    );
+  }
+
+  const entryMeta = bacBoEntryBadgeMeta(signal.entry);
+
+  return (
+    <div className="flex flex-col gap-4 rounded-lg border border-border/40 bg-background/30 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Sparkles className="h-4 w-4 text-primary" />
+        <span className="text-sm font-semibold text-foreground">
+          {signal.title}
+        </span>
+
+        {signal.active ? (
+          <Badge variant="outline" className="border-primary/30 text-primary">
+            Sinal ativo
+          </Badge>
+        ) : (
+          <Badge
+            variant="outline"
+            className="border-border/50 text-muted-foreground"
+          >
+            Aguardando padrao
+          </Badge>
+        )}
+
+        {signal.confidenceLabel && (
+          <Badge
+            variant="outline"
+            className="border-border/50 text-muted-foreground"
+          >
+            {signal.confidenceLabel}
+          </Badge>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">{signal.description}</p>
+
+      {signal.entry && signal.active && (
+        <div className="rounded-lg border border-border/40 bg-background/50 p-3">
+          <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            Entrada sugerida
+          </div>
+          <Badge variant="outline" className={entryMeta.className}>
+            {entryMeta.label}
+          </Badge>
+
+          {signal.strategy === "noEmpate10" && signal.progression?.length ? (
+            <div className="mt-3">
+              <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Progressao (3 entradas)
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {signal.progression.map((v, i) => (
+                  <div
+                    key={`${v}-${i}`}
+                    className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300"
+                  >
+                    {i + 1}a: {v}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      <div className="rounded-lg border border-border/40 p-3">
+        <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          Leitura da estrategia
+        </div>
+        <ul className="space-y-1 text-xs text-muted-foreground">
+          {signal.reasonLines.map((line, idx) => (
+            <li key={idx} className="ml-4 list-disc">
+              {line}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function BacBoHistoryList({ history }: { history: BacBoHistoryItem[] }) {
+  if (!history.length) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground">
+          Aguardando resultados...
+        </p>
+      </div>
+    );
+  }
+
+  const last = history[0];
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-4">
+        <div className="rounded-lg border border-border/40 p-3">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Ultima rodada
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            {(() => {
+              const meta = bacBoWinnerMeta(last.winner);
+              return (
+                <>
+                  <Badge variant="outline" className={meta.className}>
+                    <span
+                      className={`mr-1.5 inline-block h-2 w-2 rounded-full ${meta.dot}`}
+                    />
+                    {meta.label}
+                  </Badge>
+                  <span className="text-sm font-semibold text-foreground">
+                    P {last.playerScore} x {last.bankerScore} B
+                  </span>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-border/40 pt-4">
+        <span className="mb-2 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          Historico Bac Bo ({history.length})
+        </span>
+
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {history.map((item, i) => {
+            const meta = bacBoWinnerMeta(item.winner);
+            return (
+              <div
+                key={`${item.winner}-${item.playerScore}-${item.bankerScore}-${i}`}
+                className="rounded-lg border border-border/40 bg-background/40 p-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <Badge variant="outline" className={meta.className}>
+                    <span
+                      className={`mr-1.5 inline-block h-2 w-2 rounded-full ${meta.dot}`}
+                    />
+                    {meta.label}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    #{i + 1}
+                  </span>
+                </div>
+
+                <div className="mt-2 flex items-center justify-between">
+                  <div className="text-sm">
+                    <span className="text-muted-foreground">Azul</span>
+                    <div className="font-bold text-foreground">
+                      {item.playerScore}
+                    </div>
+                  </div>
+
+                  <Swords className="h-4 w-4 text-muted-foreground" />
+
+                  <div className="text-sm text-right">
+                    <span className="text-muted-foreground">Vermelho</span>
+                    <div className="font-bold text-foreground">
+                      {item.bankerScore}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
  * Page
  * =======================================================*/
 
@@ -810,6 +1357,8 @@ export default function GamePage() {
   const [strategyMode, setStrategyMode] = useState<StrategyMode>("default");
   const [multiplierFilter, setMultiplierFilter] =
     useState<MultiplierFilter>("all");
+  const [bacboStrategy, setBacboStrategy] =
+    useState<BacBoStrategyValue>("default");
 
   const [selectedCandles, setSelectedCandles] = useState<Set<number>>(
     new Set(),
@@ -829,10 +1378,18 @@ export default function GamePage() {
   }, []);
 
   const game = useMemo(() => {
-    return GAMES.find((g) => g.slug.replace("/", "-") === gameId);
+    return GAMES.find(
+      (g) => g.id === gameId || g.slug.replace("/", "-") === gameId,
+    );
   }, [gameId]);
 
-  const { results, connected } = useAviatorStream(game?.channelId ?? null);
+  const isCrash = game?.kind === "crash";
+  const isBacBo = game?.kind === "bacbo";
+
+  const { results, bacboHistory, bacboStats, connected } = useLiveGameStream(
+    game?.channelId ?? null,
+    game?.kind ?? null,
+  );
 
   const isAviatorStrategiesAvailable = game?.channelId === "aviator-spribe";
 
@@ -842,7 +1399,12 @@ export default function GamePage() {
     }
   }, [isAviatorStrategiesAvailable, strategyMode]);
 
-  // ✅ trava scroll quando fullscreen (e destrava ao sair)
+  useEffect(() => {
+    if (!isCrash) {
+      setSelectedCandles(new Set());
+    }
+  }, [isCrash]);
+
   useEffect(() => {
     if (!isFullscreen) return;
     const prev = document.body.style.overflow;
@@ -851,6 +1413,11 @@ export default function GamePage() {
       document.body.style.overflow = prev;
     };
   }, [isFullscreen]);
+
+  const currentBacBoSignal = useMemo(() => {
+    if (!isBacBo) return null;
+    return buildBacBoStrategySignal(bacboHistory, bacboStrategy);
+  }, [isBacBo, bacboHistory, bacboStrategy]);
 
   const startGame = useCallback(async () => {
     if (!game) return;
@@ -905,7 +1472,7 @@ export default function GamePage() {
     } finally {
       setLoading(false);
     }
-  }, [game]);
+  }, [game, getAuthHeaders]);
 
   const filteredResults = useMemo(() => {
     return applyMultiplierFilter(results, multiplierFilter);
@@ -913,7 +1480,7 @@ export default function GamePage() {
 
   if (!game) {
     return (
-      <div className="flex min-h-screen flex-col bg-background noise-overlay">
+      <div className="noise-overlay flex min-h-screen flex-col bg-background">
         <SiteHeader />
         <main className="flex flex-1 flex-col items-center justify-center gap-4 px-4">
           <h1 className="text-2xl font-bold text-foreground">
@@ -932,42 +1499,52 @@ export default function GamePage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background noise-overlay">
+    <div className="noise-overlay flex min-h-screen flex-col bg-background">
       <SiteHeader />
       <main className="flex-1">
         <div className="mx-auto max-w-5xl px-4 py-8">
           <Link
             href="/"
-            className="mb-6 inline-flex items-center gap-1.5 font-mono text-xs text-muted-foreground uppercase tracking-wider transition-colors hover:text-primary"
+            className="mb-6 inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:text-primary"
           >
             <ArrowLeft className="h-4 w-4" />
             Voltar
           </Link>
 
-          {/* Header do jogo */}
           <div className="mb-6 flex items-center gap-4">
             <div className="relative flex h-16 w-16 items-center justify-center">
               <div className="absolute inset-0 rounded-full border border-primary/20" />
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                {game.icon}
+                {game.icon ??
+                  (isBacBo ? (
+                    <Dices className="h-7 w-7" />
+                  ) : (
+                    <Eye className="h-7 w-7" />
+                  ))}
               </div>
             </div>
+
             <div className="flex-1">
               <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold text-foreground uppercase tracking-wide">
+                <h1 className="text-2xl font-bold uppercase tracking-wide text-foreground">
                   {game.name}
                 </h1>
                 <LiveClock />
               </div>
+
               <div className="mt-1 flex items-center gap-3">
-                <span className="font-mono text-xs text-muted-foreground uppercase tracking-wider">
+                <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
                   {game.provider}
                 </span>
+
                 <div className="h-3 w-px bg-border" />
+
                 <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary">
-                  Crash
+                  {isCrash ? "Crash" : "Bac Bo"}
                 </span>
+
                 <div className="h-3 w-px bg-border" />
+
                 <div className="flex items-center gap-1">
                   {connected ? (
                     <>
@@ -980,7 +1557,7 @@ export default function GamePage() {
                     <>
                       <WifiOff className="h-3.5 w-3.5 text-muted-foreground" />
                       <span className="font-mono text-[10px] uppercase text-muted-foreground">
-                        {"Conectando..."}
+                        Conectando...
                       </span>
                     </>
                   )}
@@ -989,13 +1566,13 @@ export default function GamePage() {
             </div>
           </div>
 
-          {/* Área do jogo (✅ iframe único; fullscreen só por CSS) */}
           {gameUrl ? (
             <div className="mb-8 flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <span className="font-mono text-xs font-bold uppercase tracking-wider text-foreground">
                   Jogando agora
                 </span>
+
                 <div className="flex items-center gap-2">
                   <Button
                     variant="ghost"
@@ -1006,6 +1583,7 @@ export default function GamePage() {
                     <Maximize2 className="h-4 w-4" />
                     Tela Cheia
                   </Button>
+
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1025,21 +1603,21 @@ export default function GamePage() {
                 className={
                   isFullscreen
                     ? "fixed inset-0 z-[60] bg-background"
-                    : "relative w-full overflow-hidden rounded-lg border border-border/50 " +
-                      "aspect-[9/16] max-h-[78vh] sm:max-h-none sm:aspect-video"
+                    : "relative w-full overflow-hidden rounded-lg border border-border/50 aspect-[9/16] max-h-[78vh] sm:max-h-none sm:aspect-video"
                 }
               >
                 {isFullscreen && (
                   <div className="absolute left-0 right-0 top-0 z-[61] flex items-center justify-between border-b border-border/50 bg-card/95 px-4 py-2 backdrop-blur">
                     <div className="flex items-center gap-2">
                       <Eye className="h-5 w-5 text-primary" />
-                      <span className="font-mono text-sm font-bold text-foreground uppercase">
+                      <span className="font-mono text-sm font-bold uppercase text-foreground">
                         {game.name}
                       </span>
                       <span className="font-mono text-xs text-muted-foreground">
                         {game.provider}
                       </span>
                     </div>
+
                     <div className="flex items-center gap-2">
                       <Button
                         variant="ghost"
@@ -1049,6 +1627,7 @@ export default function GamePage() {
                       >
                         <Minimize2 className="h-4 w-4" />
                       </Button>
+
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1084,7 +1663,12 @@ export default function GamePage() {
                 <div className="relative flex h-24 w-24 items-center justify-center">
                   <div className="absolute inset-0 animate-pulse rounded-full border border-primary/20" />
                   <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-primary">
-                    {game.icon}
+                    {game.icon ??
+                      (isBacBo ? (
+                        <Dices className="h-8 w-8" />
+                      ) : (
+                        <Eye className="h-8 w-8" />
+                      ))}
                   </div>
                 </div>
 
@@ -1122,14 +1706,15 @@ export default function GamePage() {
             </Card>
           )}
 
-          {/* Histórico */}
           <Card className="border-border/50 bg-card">
             <CardHeader>
               <div className="flex flex-col gap-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <CardTitle className="flex items-center gap-2 uppercase tracking-wide text-foreground">
                     <Activity className="h-5 w-5 text-primary" />
-                    Historico em Tempo Real
+                    {isCrash
+                      ? "Historico em Tempo Real"
+                      : "Bac Bo em Tempo Real"}
                     {connected && (
                       <span className="relative flex h-2.5 w-2.5">
                         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
@@ -1139,67 +1724,235 @@ export default function GamePage() {
                   </CardTitle>
                 </div>
 
-                {/* Select de estratégia */}
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                    Modo de visualização
-                  </div>
+                {isCrash ? (
+                  <>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        Modo de visualização
+                      </div>
 
-                  <div className="w-full sm:w-[340px]">
-                    <Select
-                      value={strategyMode}
-                      onValueChange={(v) => setStrategyMode(v as StrategyMode)}
-                    >
-                      <SelectTrigger className="font-mono text-xs">
-                        <SelectValue placeholder="Selecionar modo" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="default">
-                          Padrão (Último + Anteriores)
-                        </SelectItem>
-
-                        {isAviatorStrategiesAvailable && (
-                          <>
-                            <SelectItem value="minutagem10">
-                              Estratégia de minutagem (10 min)
+                      <div className="w-full sm:w-[340px]">
+                        <Select
+                          value={strategyMode}
+                          onValueChange={(v) =>
+                            setStrategyMode(v as StrategyMode)
+                          }
+                        >
+                          <SelectTrigger className="font-mono text-xs">
+                            <SelectValue placeholder="Selecionar modo" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="default">
+                              Padrão (Último + Anteriores)
                             </SelectItem>
-                            <SelectItem value="roxas">
-                              Estratégia de velas roxas
-                            </SelectItem>
-                          </>
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
 
-                {selectedCandles.size > 0 && (
-                  <div className="flex items-center justify-between rounded-lg border border-orange-400/30 bg-orange-400/5 px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <MousePointerClick className="h-4 w-4 text-orange-400" />
-                      <span className="rounded-full bg-orange-400/20 px-2 py-0.5 font-mono text-[10px] font-bold text-orange-400">
-                        {selectedCandles.size} vela
-                        {selectedCandles.size > 1 ? "s" : ""} selecionada
-                        {selectedCandles.size > 1 ? "s" : ""}
-                      </span>
+                            {isAviatorStrategiesAvailable && (
+                              <>
+                                <SelectItem value="minutagem10">
+                                  Estratégia de minutagem (10 min)
+                                </SelectItem>
+                                <SelectItem value="roxas">
+                                  Estratégia de velas roxas
+                                </SelectItem>
+                              </>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={clearSelection}
-                      className="font-mono text-xs border-orange-400/30 text-orange-400 hover:bg-orange-400/10 hover:text-orange-300"
-                    >
-                      <Eraser className="h-3.5 w-3.5" />
-                      Limpar
-                    </Button>
+
+                    {selectedCandles.size > 0 && (
+                      <div className="flex items-center justify-between rounded-lg border border-orange-400/30 bg-orange-400/5 px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <MousePointerClick className="h-4 w-4 text-orange-400" />
+                          <span className="rounded-full bg-orange-400/20 px-2 py-0.5 font-mono text-[10px] font-bold text-orange-400">
+                            {selectedCandles.size} vela
+                            {selectedCandles.size > 1 ? "s" : ""} selecionada
+                            {selectedCandles.size > 1 ? "s" : ""}
+                          </span>
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={clearSelection}
+                          className="border-orange-400/30 font-mono text-xs text-orange-400 hover:bg-orange-400/10 hover:text-orange-300"
+                        >
+                          <Eraser className="h-3.5 w-3.5" />
+                          Limpar
+                        </Button>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                      Estratégia Bac Bo
+                    </div>
+
+                    <div className="w-full sm:w-[340px]">
+                      <Select
+                        value={bacboStrategy}
+                        onValueChange={(v) =>
+                          setBacboStrategy(v as BacBoStrategyValue)
+                        }
+                      >
+                        <SelectTrigger className="font-mono text-xs">
+                          <SelectValue placeholder="Selecionar estratégia" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="default">
+                            Padrão (somente histórico)
+                          </SelectItem>
+                          <SelectItem value="pattern212">
+                            Padrão 2 . 1 . 2
+                          </SelectItem>
+                          <SelectItem value="alt2x">Alternância 2x</SelectItem>
+                          <SelectItem value="alternating">
+                            Alternância contínua
+                          </SelectItem>
+                          <SelectItem value="noEmpate10">
+                            Ausência de empate (10)
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                 )}
               </div>
             </CardHeader>
 
             <CardContent>
-              {results.length === 0 ? (
+              {isCrash ? (
+                results.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center gap-3 py-12">
+                    {connected ? (
+                      <>
+                        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                        <p className="font-mono text-sm uppercase tracking-wider text-muted-foreground">
+                          Aguardando resultados...
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <WifiOff className="h-6 w-6 text-muted-foreground" />
+                        <p className="font-mono text-sm uppercase tracking-wider text-muted-foreground">
+                          Conectando ao servidor...
+                        </p>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    {strategyMode === "default" ||
+                    !isAviatorStrategiesAvailable ? (
+                      <div className="flex items-center gap-4">
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                            Ultimo
+                          </span>
+                          <div
+                            className={`rounded-lg ring-2 ${getMultiplierRingColor(
+                              results[0].multiplier,
+                            )}`}
+                          >
+                            <MultiplierSquare
+                              result={results[0]}
+                              size="lg"
+                              selected={selectedCandles.has(results[0].id)}
+                              onToggleSelect={toggleCandleSelection}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="h-14 w-px bg-border/50" />
+
+                        <div className="flex flex-col gap-1">
+                          <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                            Anteriores
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {results.slice(1, 16).map((r) => (
+                              <MultiplierSquare
+                                key={`${r.id}-${r.timestamp}`}
+                                result={r}
+                                size="md"
+                                selected={selectedCandles.has(r.id)}
+                                onToggleSelect={toggleCandleSelection}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : strategyMode === "minutagem10" ? (
+                      <StrategyMinutagem10Panel results={results} />
+                    ) : (
+                      <StrategyVelasRoxasPanel
+                        results={results}
+                        selectedCandles={selectedCandles}
+                        onToggleSelect={toggleCandleSelection}
+                      />
+                    )}
+
+                    <div className="border-t border-border/50 pt-4">
+                      <DayMetricsBlock results={results} />
+                    </div>
+
+                    <MultiplierFilters
+                      filter={multiplierFilter}
+                      onChange={setMultiplierFilter}
+                    />
+
+                    <div className="border-t border-border/50 pt-4">
+                      <span className="mb-2 block font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        Todas as rodadas ({filteredResults.length}){" "}
+                        {multiplierFilter !== "all" &&
+                          `(filtro: ${multiplierFilter})`}
+                      </span>
+
+                      {filteredResults.length === 0 ? (
+                        <div className="rounded-lg border border-border/50 bg-background/30 px-4 py-6 text-center">
+                          <p className="text-sm text-muted-foreground">
+                            Nenhuma vela encontrada para o filtro selecionado.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-4 items-center justify-items-center gap-2 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
+                          {filteredResults.map((r) => (
+                            <MultiplierSquare
+                              key={`all-${r.id}-${r.timestamp}`}
+                              result={r}
+                              size="md"
+                              selected={selectedCandles.has(r.id)}
+                              onToggleSelect={toggleCandleSelection}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-4 border-t border-border/50 pt-3 font-mono text-[10px] text-muted-foreground">
+                      <div className="flex items-center gap-1.5">
+                        <div className="h-2.5 w-2.5 rounded-sm bg-muted/50" />
+                        <span>{"<"} 2.00x</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="h-2.5 w-2.5 rounded-sm bg-muted ring-1 ring-primary/20" />
+                        <span>2.00x - 4.99x</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="h-2.5 w-2.5 rounded-sm bg-primary/60" />
+                        <span>5.00x - 9.99x</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="h-2.5 w-2.5 rounded-sm bg-primary" />
+                        <span>10.00x+</span>
+                      </div>
+                    </div>
+                  </div>
+                )
+              ) : bacboHistory.length === 0 ? (
                 <div className="flex flex-col items-center justify-center gap-3 py-12">
                   {connected ? (
                     <>
@@ -1219,111 +1972,27 @@ export default function GamePage() {
                 </div>
               ) : (
                 <div className="flex flex-col gap-4">
-                  {strategyMode === "default" ||
-                  !isAviatorStrategiesAvailable ? (
-                    <div className="flex items-center gap-4">
-                      <div className="flex flex-col items-center gap-1">
-                        <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                          Ultimo
-                        </span>
-                        <div
-                          className={`rounded-lg ring-2 ${getMultiplierRingColor(
-                            results[0].multiplier,
-                          )}`}
-                        >
-                          <MultiplierSquare
-                            result={results[0]}
-                            size="lg"
-                            selected={selectedCandles.has(results[0].id)}
-                            onToggleSelect={toggleCandleSelection}
-                          />
-                        </div>
-                      </div>
+                  <BacBoStatsPanel stats={bacboStats} history={bacboHistory} />
 
-                      <div className="h-14 w-px bg-border/50" />
-
-                      <div className="flex flex-col gap-1">
-                        <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                          Anteriores
-                        </span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {results.slice(1, 16).map((r) => (
-                            <MultiplierSquare
-                              key={`${r.id}-${r.timestamp}`}
-                              result={r}
-                              size="md"
-                              selected={selectedCandles.has(r.id)}
-                              onToggleSelect={toggleCandleSelection}
-                            />
-                          ))}
-                        </div>
-                      </div>
+                  <div className="rounded-lg border border-border/50 bg-background/30 p-3">
+                    <div className="mb-2 flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                      <Filter className="h-3.5 w-3.5" />
+                      Leitura rápida Bac Bo
                     </div>
-                  ) : strategyMode === "minutagem10" ? (
-                    <StrategyMinutagem10Panel results={results} />
-                  ) : (
-                    <StrategyVelasRoxasPanel
-                      results={results}
-                      selectedCandles={selectedCandles}
-                      onToggleSelect={toggleCandleSelection}
-                    />
-                  )}
-
-                  <div className="border-t border-border/50 pt-4">
-                    <DayMetricsBlock results={results} />
+                    <p className="text-xs text-muted-foreground">
+                      Rodadas sem empate atualmente:{" "}
+                      <span className="font-bold text-foreground">
+                        {countRoundsWithoutEmpate(bacboHistory)}
+                      </span>
+                    </p>
                   </div>
 
-                  <MultiplierFilters
-                    filter={multiplierFilter}
-                    onChange={setMultiplierFilter}
+                  <BacBoStrategyPanel
+                    strategy={bacboStrategy}
+                    signal={currentBacBoSignal}
                   />
 
-                  <div className="border-t border-border/50 pt-4">
-                    <span className="mb-2 block font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                      Todas as rodadas ({filteredResults.length}){" "}
-                      {multiplierFilter !== "all" &&
-                        `(filtro: ${multiplierFilter})`}
-                    </span>
-
-                    {filteredResults.length === 0 ? (
-                      <div className="rounded-lg border border-border/50 bg-background/30 px-4 py-6 text-center">
-                        <p className="text-sm text-muted-foreground">
-                          Nenhuma vela encontrada para o filtro selecionado.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="grid items-center justify-items-center grid-cols-4 gap-2 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
-                        {filteredResults.map((r) => (
-                          <MultiplierSquare
-                            key={`all-${r.id}-${r.timestamp}`}
-                            result={r}
-                            size="md"
-                            selected={selectedCandles.has(r.id)}
-                            onToggleSelect={toggleCandleSelection}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-4 border-t border-border/50 pt-3 font-mono text-[10px] text-muted-foreground">
-                    <div className="flex items-center gap-1.5">
-                      <div className="h-2.5 w-2.5 rounded-sm bg-muted/50" />
-                      <span>{"<"} 2.00x</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="h-2.5 w-2.5 rounded-sm bg-muted ring-1 ring-primary/20" />
-                      <span>2.00x - 4.99x</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="h-2.5 w-2.5 rounded-sm bg-primary/60" />
-                      <span>5.00x - 9.99x</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="h-2.5 w-2.5 rounded-sm bg-primary" />
-                      <span>10.00x+</span>
-                    </div>
-                  </div>
+                  <BacBoHistoryList history={bacboHistory} />
                 </div>
               )}
             </CardContent>
