@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Play, Activity, Plane } from "lucide-react";
+import { Play, Activity, Plane, Dices } from "lucide-react";
 
 export type GameBadge =
   | "ao-vivo"
