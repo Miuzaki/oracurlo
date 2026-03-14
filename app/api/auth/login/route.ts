@@ -1,17 +1,7 @@
 import { NextResponse } from "next/server";
 
-const SUPABASE_URL = "https://dufiwjtermmxfpcpeixd.supabase.co";
-const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR1Zml3anRlcm1teGZwY3BlaXhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ1ODc4NjAsImV4cCI6MjA3MDE2Mzg2MH0.lRw6CrAkjefy0mnSmdMYxFH6YRZI6j4-85WBh_hHCJE";
-
-function supabaseHeaders(): Record<string, string> {
-  return {
-    "Accept": "*/*",
-    "Content-Type": "application/json",
-    "apikey": SUPABASE_ANON_KEY,
-    "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-  };
-}
+const API_BASE_URL = process.env.API_URL || "http://localhost:8090";
+const TENANT_SLUG = process.env.NEXT_PUBLIC_TENANT_SLUG || "oraculo-aviator";
 
 export async function POST(request: Request) {
   try {
@@ -25,48 +15,36 @@ export async function POST(request: Request) {
       );
     }
 
-    // Step 1: Call Supabase Edge Function external-login
+    // Call HistoryLab Operational API login
     const loginResponse = await fetch(
-      `${SUPABASE_URL}/functions/v1/external-login`,
+      `${API_BASE_URL}/api/operational/auth/login`,
       {
         method: "POST",
-        headers: supabaseHeaders(),
-        body: JSON.stringify({ email, password }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          tenantSlug: TENANT_SLUG,
+          email,
+          password,
+        }),
       }
     );
 
-    const loginText = await loginResponse.text();
-    console.log("[v0] external-login status:", loginResponse.status);
-    console.log("[v0] external-login response:", loginText.substring(0, 500));
-
-    let loginData: Record<string, unknown>;
-    try {
-      loginData = JSON.parse(loginText);
-    } catch {
-      return NextResponse.json(
-        { success: false, message: "Resposta invalida do servidor de autenticacao" },
-        { status: 502 }
-      );
-    }
+    const loginData = await loginResponse.json();
 
     if (!loginResponse.ok || !loginData.success) {
-      const message =
-        (loginData.message as string) || "Credenciais invalidas";
+      const message = loginData.message || "Credenciais invalidas";
       return NextResponse.json(
         { success: false, message },
         { status: loginResponse.status >= 400 ? loginResponse.status : 422 }
       );
     }
 
-    // Response format: { success, user: { id, name, email }, access_token, token_type, expires_in, connect_sid }
-    const accessToken = loginData.access_token as string;
-    const connectSid = String(loginData.connect_sid || "");
-    const userObj = loginData.user as Record<string, unknown> | undefined;
-    const userEmail = (userObj?.email as string) || email;
-    const userName = (userObj?.name as string) || email;
-    const userId = userObj?.id;
+    // Response format: { success, data: { token, user: { id, email, name, tenantId, identityType } } }
+    const { token, user } = loginData.data;
 
-    if (!accessToken) {
+    if (!token) {
       return NextResponse.json(
         { success: false, message: "Token nao encontrado na resposta" },
         { status: 500 }
@@ -75,9 +53,11 @@ export async function POST(request: Request) {
 
     // Build player object from login response
     const player = {
-      id: userId || connectSid,
-      name: userName,
-      email: userEmail,
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      externalId: user.externalId,
+      tenantId: user.tenantId,
     };
 
     // Return session data to the frontend
@@ -86,9 +66,7 @@ export async function POST(request: Request) {
       message: "Login realizado com sucesso",
       data: {
         player,
-        bearerToken: accessToken,
-        connectSid,
-        userEmail,
+        token,
       },
     });
   } catch (error) {

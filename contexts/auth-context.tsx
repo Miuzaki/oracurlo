@@ -10,12 +10,15 @@ export interface Player {
   username?: string;
   email?: string;
   phone?: string;
+  externalId?: string;
+  tenantId?: string;
   wallet?: {
     id?: number;
     balance?: number;
     credit?: number;
     available_value?: number;
     bonus?: number;
+    currency?: string;
     withdraw_enabled?: number;
     rollover_is_active?: number;
     rollover_amount?: number;
@@ -32,33 +35,23 @@ export interface Player {
 
 // Session keys for sessionStorage
 const SESSION_KEYS = {
-  BEARER_TOKEN: "auth_bearer_token",
-  CONNECT_SID: "auth_connect_sid",
-  USER_EMAIL: "auth_user_email",
+  AUTH_TOKEN: "auth_token",
   PLAYER_DATA: "auth_player_data",
 } as const;
 
-function getSessionData() {
+function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  const bearerToken = sessionStorage.getItem(SESSION_KEYS.BEARER_TOKEN);
-  const connectSid = sessionStorage.getItem(SESSION_KEYS.CONNECT_SID);
-  const userEmail = sessionStorage.getItem(SESSION_KEYS.USER_EMAIL);
-  if (!bearerToken || !connectSid || !userEmail) return null;
-  return { bearerToken, connectSid, userEmail };
+  return sessionStorage.getItem(SESSION_KEYS.AUTH_TOKEN);
 }
 
-function saveSessionData(bearerToken: string, connectSid: string, userEmail: string) {
+function saveToken(token: string) {
   if (typeof window === "undefined") return;
-  sessionStorage.setItem(SESSION_KEYS.BEARER_TOKEN, bearerToken);
-  sessionStorage.setItem(SESSION_KEYS.CONNECT_SID, connectSid);
-  sessionStorage.setItem(SESSION_KEYS.USER_EMAIL, userEmail);
+  sessionStorage.setItem(SESSION_KEYS.AUTH_TOKEN, token);
 }
 
 function clearSessionData() {
   if (typeof window === "undefined") return;
-  sessionStorage.removeItem(SESSION_KEYS.BEARER_TOKEN);
-  sessionStorage.removeItem(SESSION_KEYS.CONNECT_SID);
-  sessionStorage.removeItem(SESSION_KEYS.USER_EMAIL);
+  sessionStorage.removeItem(SESSION_KEYS.AUTH_TOKEN);
   sessionStorage.removeItem(SESSION_KEYS.PLAYER_DATA);
 }
 
@@ -84,12 +77,10 @@ function getStoredPlayerData(): Player | null {
 
 // Build auth headers for fetch calls to our Next.js API routes
 function buildAuthHeaders(): Record<string, string> {
-  const session = getSessionData();
-  if (!session) return {};
+  const token = getToken();
+  if (!token) return {};
   return {
-    "x-bearer-token": session.bearerToken,
-    "x-connect-sid": session.connectSid,
-    "x-user-email": session.userEmail,
+    "Authorization": `Bearer ${token}`,
   };
 }
 
@@ -101,6 +92,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   checkSession: () => Promise<void>;
   getAuthHeaders: () => Record<string, string>;
+  getToken: () => string | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -113,8 +105,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       setIsLoading(true);
 
-      const session = getSessionData();
-      if (!session) {
+      const token = getToken();
+      if (!token) {
         setPlayer(null);
         return;
       }
@@ -137,7 +129,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         // /me failed -- use stored player data as fallback if we still have tokens
         const storedPlayer = getStoredPlayerData();
-        if (storedPlayer && session) {
+        if (storedPlayer && token) {
           setPlayer(storedPlayer);
         } else {
           clearSessionData();
@@ -146,8 +138,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     } catch {
       const storedPlayer = getStoredPlayerData();
-      const session = getSessionData();
-      if (storedPlayer && session) {
+      const token = getToken();
+      if (storedPlayer && token) {
         setPlayer(storedPlayer);
       } else {
         setPlayer(null);
@@ -172,10 +164,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await res.json();
 
       if (data.success) {
-        const { bearerToken, connectSid, userEmail, player: playerData } = data.data;
+        const { token, player: playerData } = data.data;
 
-        if (bearerToken && connectSid && userEmail) {
-          saveSessionData(bearerToken, connectSid, userEmail);
+        if (token) {
+          saveToken(token);
         }
 
         if (playerData) {
@@ -215,7 +207,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/auth/logout", { 
+        method: "POST",
+        headers: buildAuthHeaders(),
+      });
     } finally {
       clearSessionData();
       setPlayer(null);
@@ -232,6 +227,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout,
         checkSession,
         getAuthHeaders: buildAuthHeaders,
+        getToken,
       }}
     >
       {children}

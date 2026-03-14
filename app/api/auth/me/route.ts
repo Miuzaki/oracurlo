@@ -1,84 +1,82 @@
 import { NextResponse } from "next/server";
 
-const SUPABASE_URL = "https://dufiwjtermmxfpcpeixd.supabase.co";
-const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR1Zml3anRlcm1teGZwY3BlaXhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ1ODc4NjAsImV4cCI6MjA3MDE2Mzg2MH0.lRw6CrAkjefy0mnSmdMYxFH6YRZI6j4-85WBh_hHCJE";
-
-function supabaseHeaders(): Record<string, string> {
-  return {
-    "Accept": "*/*",
-    "Content-Type": "application/json",
-    "apikey": SUPABASE_ANON_KEY,
-    "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-  };
-}
+const API_BASE_URL = process.env.API_URL || "http://localhost:8090";
 
 export async function GET(request: Request) {
   try {
-    // Read auth data from custom headers (frontend sends from sessionStorage)
-    const bearerToken = request.headers.get("x-bearer-token");
-    const connectSid = request.headers.get("x-connect-sid");
-    const userEmail = request.headers.get("x-user-email");
+    // Read auth token from Authorization header
+    const authHeader = request.headers.get("authorization");
+    const token = authHeader?.replace("Bearer ", "");
 
-    if (!bearerToken || !connectSid || !userEmail) {
+    if (!token) {
       return NextResponse.json(
         { success: false, message: "Nao autenticado" },
         { status: 401 }
       );
     }
 
-    // Call Supabase Edge Function get-user-balance
-    const balanceResponse = await fetch(
-      `${SUPABASE_URL}/functions/v1/get-user-balance`,
+    // Call HistoryLab Operational API to get user profile
+    const meResponse = await fetch(
+      `${API_BASE_URL}/api/operational/auth/me`,
       {
-        method: "POST",
-        headers: supabaseHeaders(),
-        body: JSON.stringify({
-          bearerToken,
-          connectSid,
-          userEmail,
-        }),
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
       }
     );
 
-    const balanceText = await balanceResponse.text();
-    console.log("[v0] get-user-balance status:", balanceResponse.status);
-    console.log("[v0] get-user-balance response:", balanceText.substring(0, 500));
+    const meData = await meResponse.json();
 
-    let balanceData: Record<string, unknown>;
-    try {
-      balanceData = JSON.parse(balanceText);
-    } catch {
+    if (!meResponse.ok || !meData.success) {
       return NextResponse.json(
-        { success: false, message: "Resposta invalida do servidor" },
-        { status: 502 }
-      );
-    }
-
-    if (!balanceResponse.ok || !balanceData.success) {
-      return NextResponse.json(
-        { success: false, message: (balanceData.message as string) || "Sessao expirada" },
+        { success: false, message: meData.message || "Sessao expirada" },
         { status: 401 }
       );
     }
 
-    // Response format: { success, saldo, saldo_formatted, wallet: { id, balance, credit, ... } }
-    const wallet = balanceData.wallet as Record<string, unknown> | undefined;
+    // Get balance from provider
+    const balanceResponse = await fetch(
+      `${API_BASE_URL}/api/operational/auth/balance`,
+      {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+      }
+    );
+
+    let balance = 0;
+    let currency = "BRL";
+    
+    if (balanceResponse.ok) {
+      const balanceData = await balanceResponse.json();
+      if (balanceData.success && balanceData.data) {
+        balance = balanceData.data.balance || 0;
+        currency = balanceData.data.currency || "BRL";
+      }
+    }
+
+    const user = meData.data;
 
     const player = {
-      id: connectSid,
-      email: userEmail,
-      name: userEmail,
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      externalId: user.externalId,
+      tenantId: user.tenantId,
       wallet: {
-        balance: wallet?.balance ?? 0,
-        credit: wallet?.credit ?? 0,
-        available_value: wallet?.available_value ?? 0,
-        bonus: wallet?.bonus ?? 0,
+        balance: balance,
+        credit: balance,
+        available_value: balance,
+        currency: currency,
       },
       _cached: {
         "get-credits": {
-          credit: (balanceData.saldo as number) ?? 0,
-          bonus: (wallet?.bonus as number) ?? 0,
+          credit: balance,
+          bonus: 0,
         },
       },
     };

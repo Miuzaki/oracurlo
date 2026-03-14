@@ -1,17 +1,6 @@
 import { NextResponse } from "next/server";
 
-const SUPABASE_URL = "https://dufiwjtermmxfpcpeixd.supabase.co";
-const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR1Zml3anRlcm1teGZwY3BlaXhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ1ODc4NjAsImV4cCI6MjA3MDE2Mzg2MH0.lRw6CrAkjefy0mnSmdMYxFH6YRZI6j4-85WBh_hHCJE";
-
-function supabaseHeaders(): Record<string, string> {
-  return {
-    "Accept": "*/*",
-    "Content-Type": "application/json",
-    "apikey": SUPABASE_ANON_KEY,
-    "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-  };
-}
+const API_BASE_URL = process.env.API_URL || "http://localhost:8090";
 
 export async function POST(request: Request) {
   try {
@@ -25,60 +14,55 @@ export async function POST(request: Request) {
       );
     }
 
-    // Read auth data from custom headers
-    const userEmail = request.headers.get("x-user-email");
+    // Read auth token from Authorization header
+    const authHeader = request.headers.get("authorization");
+    const token = authHeader?.replace("Bearer ", "");
 
-    if (!userEmail) {
+    if (!token) {
       return NextResponse.json(
         { success: false, message: "Nao autenticado. Faca login novamente." },
         { status: 401 }
       );
     }
 
-    // Call Supabase Edge Function generate-pix
-    // Body: { email, valor }
+    // Convert amount from reais to centavos
+    const amountCents = Math.round(Number(amount) * 100);
+
+    // Call HistoryLab Operational API to create deposit
     const response = await fetch(
-      `${SUPABASE_URL}/functions/v1/generate-pix`,
+      `${API_BASE_URL}/api/operational/deposits`,
       {
         method: "POST",
-        headers: supabaseHeaders(),
-        body: JSON.stringify({
-          email: userEmail,
-          valor: Number(amount),
-        }),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ amountCents }),
       }
     );
 
-    const responseText = await response.text();
-    console.log("[v0] generate-pix status:", response.status);
-    console.log("[v0] generate-pix response:", responseText.substring(0, 500));
-
-    let data: Record<string, unknown>;
-    try {
-      data = JSON.parse(responseText);
-    } catch {
-      return NextResponse.json(
-        { success: false, message: "Resposta invalida do servidor" },
-        { status: 502 }
-      );
-    }
+    const data = await response.json();
 
     if (!response.ok || !data.success) {
       return NextResponse.json(
-        { success: false, message: (data.message as string) || "Erro ao processar deposito" },
+        { success: false, message: data.message || "Erro ao processar deposito" },
         { status: response.status >= 400 ? response.status : 500 }
       );
     }
 
-    // Response format: { success, pix_code, qr_code, transaction_id, amount, value }
+    // Response format: { success, data: { id, amountCents, status, pixQrCode, pixBrCode, expiresAt, createdAt } }
+    const deposit = data.data;
+
     return NextResponse.json({
       success: true,
       data: {
-        pix_code: data.pix_code,
-        qr_code: data.qr_code,
-        transaction_id: data.transaction_id,
-        amount: data.amount,
-        value: data.value,
+        pix_code: deposit.pixBrCode,
+        qr_code: deposit.pixQrCode,
+        transaction_id: deposit.id,
+        amount: deposit.amountCents / 100,
+        value: deposit.amountCents,
+        status: deposit.status,
+        expiresAt: deposit.expiresAt,
       },
     });
   } catch (error) {
